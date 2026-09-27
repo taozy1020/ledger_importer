@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "batch_id": "merge-demo-2026-09",
+  "bank_file": "related/bank.csv",
+  "alipay_file": "related/alipay.csv"
+}

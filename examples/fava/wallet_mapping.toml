@@ -1,0 +1,19 @@
+[importer]
+name = "Wallet CSV profile"
+
+[source]
+account = "Assets:Wallet:Balance"
+currency = "CNY"
+
+[columns]
+date = "date"
+amount = "amount"
+payee = "payee"
+narration = "narration"
+category = "category"
+source_id = "id"
+
+[categories]
+"餐饮" = "Expenses:Food"
+"交通" = "Expenses:Transport"
+"工资" = "Income:Salary"

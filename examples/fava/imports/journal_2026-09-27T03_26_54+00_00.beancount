@@ -1,0 +1,24 @@
+;; -*- mode: org; mode: beancount; -*-
+
+option "title" "Beancount - Journal Export"
+
+option "operating_currency" "CNY"
+option "name_assets" "Assets"
+option "name_liabilities" "Liabilities"
+option "name_equity" "Equity"
+option "name_income" "Income"
+option "name_expenses" "Expenses"
+plugin "beancount.plugins.auto_accounts"
+
+2026-09-01 * "示例咖啡店" "咖啡"
+  source_category: "餐饮"
+  source_id: "fava-001"
+  Assets:Bank:Checking                               -38.50 CNY
+  Expenses:Food                                       38.50 CNY
+
+2026-09-02 * "示例地铁" "通勤"
+  source_category: "交通"
+  source_id: "fava-002"
+  Assets:Bank:Checking                               -12.00 CNY
+  Expenses:Transport                                  12.00 CNY
+

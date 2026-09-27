@@ -1,0 +1,16 @@
+[source]
+account = "Assets:Bank:Checking"
+currency = "CNY"
+
+[columns]
+date = "date"
+amount = "amount"
+payee = "payee"
+narration = "narration"
+category = "category"
+source_id = "id"
+
+[categories]
+"餐饮" = "Expenses:Food"
+"交通" = "Expenses:Transport"
+"工资" = "Income:Salary"

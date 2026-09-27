@@ -1,0 +1,3 @@
+id,date,amount,payee,narration,category
+bank-alipay-001,2026-09-10,-38.50,支付宝,支付宝快捷支付,支付平台
+bank-shop-002,2026-09-11,-22.00,便利店,日常购物,购物

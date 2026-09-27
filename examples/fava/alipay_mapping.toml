@@ -1,0 +1,19 @@
+[importer]
+name = "Alipay details in related bundle"
+
+[source]
+account = "Assets:Alipay:Balance"
+currency = "CNY"
+
+[columns]
+date = "date"
+amount = "amount"
+payee = "payee"
+narration = "narration"
+category = "category"
+source_id = "id"
+
+[categories]
+"餐饮" = "Expenses:Food"
+"交通" = "Expenses:Transport"
+"购物" = "Expenses:Groceries"

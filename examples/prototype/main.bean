@@ -1,0 +1,7 @@
+option "operating_currency" "CNY"
+
+include "accounts.bean"
+include "imported.bean"
+
+2000-01-01 custom "fava-option" "import-config" "import_config.py"
+2000-01-01 custom "fava-option" "import-dirs" "imports"

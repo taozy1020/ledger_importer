@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 bean-import-csv = "bean_import.cli:main"
+bean-import-batch = "bean_import.batch_cli:main"
 
 [project.optional-dependencies]
 fava = ["fava>=1,<2"]
@@ -45,4 +46,4 @@ select = ["E", "F", "I", "UP", "B"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
-include = ["src", "tests", "examples/fava"]
+include = ["src", "tests", "examples/fava", "examples/prototype"]

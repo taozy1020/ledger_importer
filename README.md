@@ -78,6 +78,27 @@ bean-import-csv --help
 - [公开文档索引](doc/README.md)：产品、架构、部署和使用说明。
 - [研究方向](doc/research-direction.md)：多来源归一化与 LLM 语义分类。
 
+## 平台账单原型
+
+微信、支付宝手机账单，以及中行借记卡/信用卡的表格适配器在 `examples/prototype/`。每个客户使用自己的 `ledger.toml`：资金账户、卡号尾号、允许分类的账户，以及 `[[knowledge.examples]]` 和 `[[knowledge.guides]]`。
+
+分类不使用 LangChain 或 LangGraph。流程是固定的：先做一对一合并，再检索这份知识库，最后可选地调用一次 OpenAI 兼容接口。模型只能返回允许列表里的账户。`endpoint` 为空时，只使用知识库中的商户示例；没有命中就记入 suspense 账户。PDF 和邮件容器会明确拒绝，当前读取的是这些账单的 CSV 表格。
+
+```sh
+uv run bean-import-batch \
+  --config examples/prototype/ledger.toml \
+  --output /tmp/prototype.bean \
+  examples/prototype/statements/*.csv
+```
+
+Fava 示例：
+
+```sh
+uv run fava examples/prototype/main.bean
+```
+
+导入页选择 `demo.batch.json` 的 `WeChat + Alipay + BOC batch`。它会把支付宝银行卡消费和中行借记卡清算合并成一笔，并把信用卡还款、微信提现识别为结构性交易，不送给分类器。
+
 ## 跑通最小例子
 
 ```sh
@@ -121,7 +142,7 @@ Fava/Beangulp 的具体选项语法随所用版本查看 Fava 自带 Import 帮�
 
 ## 当前明确不做
 
-- 支付宝/微信原始格式解析、PDF/OCR。
+- 账单 PDF、EML 容器和 OCR。微信、支付宝手机 CSV，以及中行表格 CSV 已有原型。
 - 跨平台模糊匹配、退款/转账/拆分事件推断。
 - 通用规则语言、规则草稿回放，以及由模型直接提交主账。LLM 语义分类是研究方向，尚未在当前代码中实现。
 

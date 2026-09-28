@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "files": [
+    "../statements/wechat.csv",
+    "../statements/alipay.csv",
+    "../statements/boc_debit.csv",
+    "../statements/boc_credit.csv"
+  ]
+}

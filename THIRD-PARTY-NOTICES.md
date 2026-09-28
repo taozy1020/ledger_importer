@@ -8,7 +8,10 @@ The runtime dependency set includes:
 - **Beancount**: GPL-2.0-or-later, as declared by the package metadata.
 - **Beangulp**: GPL-2.0, as declared by the package metadata.
 
-The optional Fava development/integration dependency is MIT-licensed. Other
+The optional Fava development/integration dependency is MIT-licensed.
+Statement column layouts for WeChat, Alipay, and Bank of China are informed by
+[china_bean_importers](https://github.com/jiegec/china_bean_importers) (MIT).
+This repository does not vendor that code. Other
 transitive dependencies may have their own licenses; the exact locked set is
 recorded in `uv.lock` and can be exported with:
 

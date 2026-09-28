@@ -1,0 +1,49 @@
+currency = "CNY"
+date_window_days = 2
+
+[accounts]
+wechat = "Assets:WeChat:Balance"
+alipay = "Assets:Alipay:Balance"
+boc_debit = "Assets:Bank:BOC:Debit"
+boc_credit = "Liabilities:CreditCard:BOC"
+
+[cards]
+"1234" = "Assets:Bank:BOC:Debit"
+"5678" = "Liabilities:CreditCard:BOC"
+
+[classifier]
+endpoint = ""
+model = ""
+api_key_env = "BEAN_IMPORT_LLM_API_KEY"
+suspense_expense = "Expenses:Uncategorized"
+suspense_income = "Income:Uncategorized"
+max_examples = 8
+
+[roles]
+expense = [
+  "Expenses:Food",
+  "Expenses:Food:Coffee",
+  "Expenses:Food:Meal",
+  "Expenses:Groceries",
+  "Expenses:Uncategorized",
+]
+income = ["Income:Salary", "Income:Uncategorized"]
+
+[[knowledge.examples]]
+payee = "瑞幸咖啡"
+account = "Expenses:Food:Coffee"
+note = "咖啡连锁"
+
+[[knowledge.examples]]
+payee = "兰州拉面"
+account = "Expenses:Food:Meal"
+note = "正餐"
+
+[[knowledge.examples]]
+payee = "超市"
+account = "Expenses:Groceries"
+note = "日用品采购"
+
+[[knowledge.guides]]
+keywords = ["餐饮", "咖啡", "奶茶"]
+text = "咖啡和奶茶归入 Expenses:Food:Coffee。正餐归入 Expenses:Food:Meal。"

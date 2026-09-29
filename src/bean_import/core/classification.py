@@ -1,11 +1,12 @@
-"""The boundary between the deterministic import and semantic classification.
+"""The contract between the deterministic import and anything that guesses.
 
 Milestone 1 runs without any model. Adapters, normalization and rendering decide
-everything that can be derived from the statements themselves; the contra account
-of a plain expense or income is left unknown instead of guessed.
+everything that can be derived from the statements themselves; the contra
+account of a plain expense or income is left unknown instead of guessed.
 
 Milestone 2 plugs an implementation of `SemanticClassifier` into this same
-interface. Nothing outside this module needs to know whether a model exists.
+interface. Nothing outside this module needs to know whether a model exists,
+and no implementation can widen the allowlist or fail the import.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Protocol
 
 ACCEPTED = "accepted"
 UNKNOWN = "unknown"
@@ -22,7 +22,7 @@ UNKNOWN = "unknown"
 
 @dataclass(frozen=True, slots=True)
 class ClassificationRequest:
-    """The only facts a semantic classifier is allowed to see."""
+    """The only facts a classifier is allowed to see."""
 
     event_id: str
     kind: str
@@ -37,6 +37,7 @@ class ClassificationRequest:
     source_types: tuple[str, ...]
     allowed_accounts: tuple[str, ...]
     unknown_account: str
+    known_accounts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,19 +50,25 @@ class Classification:
     model_id: str
     status: str
 
-
-class SemanticClassifier(Protocol):
-    def classify(self, request: ClassificationRequest) -> Classification:
-        """Choose one allowed account, or the unknown account when unsafe."""
-
-        ...
+    @property
+    def resolved(self) -> bool:
+        return self.status == ACCEPTED
 
 
-class UnknownClassifier:
-    """Milestone 1: keep the direction that is certain, refuse to invent a category."""
+def accept(
+    account: str,
+    reason: str,
+    model_id: str,
+) -> Classification:
+    """Take responsibility for an account that the caller already validated."""
 
-    def classify(self, request: ClassificationRequest) -> Classification:
-        return unknown(request, "未启用语义分类，按金额方向归入未知账户")
+    return Classification(
+        account=account,
+        uncertain=False,
+        reason=reason[:200],
+        model_id=model_id,
+        status=ACCEPTED,
+    )
 
 
 def unknown(

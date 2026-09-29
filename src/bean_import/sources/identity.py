@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from bean_import.customer_config import CustomerConfig, SourceInstance
+from bean_import.config.customer import CustomerConfig, SourceInstance
 from bean_import.sources.common import SourceParseError
 
 HEADER_CHARACTERS = 4000

@@ -1,6 +1,8 @@
 # 代码阅读指南
 
-这份原型刻意保留两条入口，但共用同一个领域转换函数。先读 `mapping.py` 理解“一个 CSV 行如何成为一笔平衡交易”，再分别跟 CLI 和 Fava 的入口。
+这份 0.1 预研切片现在收在 `src/bean_import/csv_demo/` 里，自成一体，只依赖 `core`。平台账单那条流水线见 [平台账单原型审阅指引](prototype-review-guide.md)。
+
+它刻意保留两条入口，但共用同一个领域转换函数。先读 `mapping.py` 理解“一个 CSV 行如何成为一笔平衡交易”，再分别跟 CLI 和 Fava 的入口。
 
 ## 1. 先记住边界
 
@@ -25,14 +27,14 @@ flowchart LR
 ## 2. 建议阅读顺序
 
 1. [test_mapping.py](../tests/test_mapping.py)：先从支出、收入的预期金额和未知类别行为理解会计映射。
-2. [models.py](../src/bean_import/models.py)：认识核心数据类型 `SourceRecord`。
-3. [config.py](../src/bean_import/config.py)：看配置加载、字段名默认值和输入检查。
-4. [csv_source.py](../src/bean_import/csv_source.py)：看 header 检查、行号、ISO 日期、`Decimal` 和 source ID。
-5. [mapping.py](../src/bean_import/mapping.py)：看纯转换函数，理解 posting 符号、目标账户和来源 metadata。
-6. [cli.py](../src/bean_import/cli.py)：沿着命令行入口看同一 mapping 如何打印为 Beancount。
-7. [importer.py](../src/bean_import/importer.py)：看它如何实现 Beangulp 协议，把相同逻辑交给 Fava。
+2. [models.py](../src/bean_import/csv_demo/models.py)：认识核心数据类型 `SourceRecord`。
+3. [config.py](../src/bean_import/csv_demo/config.py)：看配置加载、字段名默认值和输入检查。
+4. [csv_source.py](../src/bean_import/csv_demo/csv_source.py)：看 header 检查、行号、ISO 日期、`Decimal` 和 source ID。
+5. [mapping.py](../src/bean_import/csv_demo/mapping.py)：看纯转换函数，理解 posting 符号、目标账户和来源 metadata。
+6. [cli.py](../src/bean_import/csv_demo/cli.py)：沿着命令行入口看同一 mapping 如何打印为 Beancount。
+7. [importer.py](../src/bean_import/csv_demo/importer.py)：看它如何实现 Beangulp 协议，把相同逻辑交给 Fava。
 8. [import_config.py](../examples/fava/import_config.py)：ledger 侧的 Fava 配置模块；`CONFIG` 注册 importer，`HOOKS` 当前为空，它从运行环境导入 `bean_import`。
-9. [related_batch.py](../src/bean_import/related_batch.py)：看 manifest 路径约束、一对一银行/支付宝匹配、信息富化、余额独立导入和 fail-closed 错误。
+9. [related_batch.py](../src/bean_import/csv_demo/related_batch.py)：看 manifest 路径约束、一对一银行/支付宝匹配、信息富化、余额独立导入和 fail-closed 错误。
 10. 对照 [test_csv_source.py](../tests/test_csv_source.py)、[test_importer.py](../tests/test_importer.py)、[test_related_batch.py](../tests/test_related_batch.py)，看 parser、多个 importer、默认判重和多文件异常。
 
 ## 3. 两条调用链

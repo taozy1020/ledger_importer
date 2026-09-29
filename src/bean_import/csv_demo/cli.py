@@ -8,9 +8,9 @@ from pathlib import Path
 
 from beancount.parser import printer
 
-from bean_import.config import load_config
-from bean_import.csv_source import read_records
-from bean_import.mapping import map_record
+from bean_import.csv_demo.config import load_config
+from bean_import.csv_demo.csv_source import read_records
+from bean_import.csv_demo.mapping import map_record
 
 
 def convert_csv(input_path: Path, output_path: Path, config_path: Path) -> int:

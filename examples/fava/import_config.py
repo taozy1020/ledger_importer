@@ -2,8 +2,9 @@
 
 from pathlib import Path
 
-from bean_import import CsvMappingImporter, load_config
-from bean_import.related_batch import (
+from bean_import.csv_demo.config import load_config
+from bean_import.csv_demo.importer import CsvMappingImporter
+from bean_import.csv_demo.related_batch import (
     RelatedBatchConfig,
     RelatedBatchImporter,
 )

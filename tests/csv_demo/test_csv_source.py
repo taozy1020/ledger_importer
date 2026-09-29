@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from bean_import.config import CsvColumns, CsvImportConfig
-from bean_import.csv_source import CsvImportError, read_records
+from bean_import.csv_demo.config import CsvColumns, CsvImportConfig
+from bean_import.csv_demo.csv_source import CsvImportError, read_records
 
 
 @pytest.fixture

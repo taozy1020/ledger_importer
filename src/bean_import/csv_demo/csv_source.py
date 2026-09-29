@@ -10,8 +10,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TextIO
 
-from bean_import.config import CsvImportConfig
-from bean_import.models import SourceRecord
+from bean_import.core.models import SourceRecord
+from bean_import.csv_demo.config import CsvImportConfig
 
 
 class CsvImportError(ValueError):

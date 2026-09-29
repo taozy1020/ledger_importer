@@ -13,9 +13,9 @@ from pathlib import Path
 
 from beancount.parser import printer
 
-from bean_import.batch_importer import scan_folder
-from bean_import.customer_config import CustomerConfig, load_customer_config
-from bean_import.pipeline import import_files
+from bean_import.app.fava import scan_folder
+from bean_import.app.pipeline import import_files
+from bean_import.config.customer import CustomerConfig, load_customer_config
 
 
 def collect_statements(

@@ -11,11 +11,13 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
-from beancount.core.data import Directive
+from beancount.core.data import Directive, Transaction
+from beangulp.extract import DUPLICATE
 from beangulp.importer import Importer
 
-from bean_import.customer_config import CustomerConfig
-from bean_import.pipeline import import_files
+from bean_import.app.pipeline import import_files
+from bean_import.config.customer import CustomerConfig
+from bean_import.core.render import EVENT_ID
 from bean_import.sources import detect_kind, read_platform_file
 from bean_import.sources.common import MAX_STATEMENT_BYTES, SourceParseError, read_text
 
@@ -26,7 +28,55 @@ class BatchError(ValueError):
     """A statement folder cannot be imported safely."""
 
 
-class PlatformImporter(Importer):
+def mark_known_events(
+    entries: Sequence[Directive],
+    existing: Sequence[Directive],
+) -> int:
+    """Mark anything already in the ledger under the same `event_id`.
+
+    Beangulp's default comparison looks at accounts and amounts, so it stops
+    recognizing a transaction the moment the person recategorizes it — which is
+    exactly what they do on the first import. Downloading next month's
+    statement into the same folder would then re-offer every corrected
+    transaction as new. `event_id` is derived from the statement rows alone, so
+    it survives any amount of editing on the ledger side.
+
+    The mark is the ledger entry itself, which is what beangulp stores, so the
+    command line report can still say which transaction this repeats.
+    """
+
+    known: dict[str, Transaction] = {}
+    for entry in existing:
+        if not isinstance(entry, Transaction) or not entry.meta:
+            continue
+        event_id = entry.meta.get(EVENT_ID)
+        if isinstance(event_id, str) and event_id:
+            known.setdefault(event_id, entry)
+    marked = 0
+    for entry in entries:
+        if not isinstance(entry, Transaction) or not entry.meta:
+            continue
+        event_id = entry.meta.get(EVENT_ID)
+        already = known.get(event_id) if isinstance(event_id, str) else None
+        if already is not None and DUPLICATE not in entry.meta:
+            entry.meta[DUPLICATE] = already
+            marked += 1
+    return marked
+
+
+class _EventAwareImporter(Importer):
+    """Beangulp importer that trusts `event_id` over amount heuristics."""
+
+    def deduplicate(
+        self,
+        entries: list[Directive],
+        existing: list[Directive],
+    ) -> None:
+        super().deduplicate(entries, existing)  # pyright: ignore[reportUnknownMemberType]
+        mark_known_events(entries, existing)
+
+
+class PlatformImporter(_EventAwareImporter):
     """Import one WeChat, Alipay, or Bank of China CSV through the pipeline."""
 
     def __init__(self, config: CustomerConfig) -> None:
@@ -63,7 +113,7 @@ class PlatformImporter(Importer):
         return list(import_files([filepath], self.config, existing))
 
 
-class PlatformBatchImporter(Importer):
+class PlatformBatchImporter(_EventAwareImporter):
     """Import every statement in the folder the customer config points at."""
 
     def __init__(self, config: CustomerConfig, config_path: Path) -> None:

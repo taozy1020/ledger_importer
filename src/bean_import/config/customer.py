@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from bean_import.core.render import ADVICE_DETAIL, ADVICE_SHORT
+
 SOURCE_TYPES = ("wechat", "alipay", "boc_debit", "boc_credit")
 SUB_ACCOUNTS = {
     "wechat": ("lingqiantong",),
@@ -65,6 +67,37 @@ class Card:
 
 
 @dataclass(frozen=True, slots=True)
+class JournalConfig:
+    """Where proposals are recorded so decisions can be harvested later."""
+
+    path: Path
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AdviceConfig:
+    """How much the past is allowed to say about the present.
+
+    `auto_accept_above` is zero by default: history informs the reviewer and
+    never fills an account in on its own until the ledger asks for it.
+
+    `metadata` decides how much of the advice the ledger keeps forever. Fava
+    writes the entry exactly as the reviewer saw it, so `full` leaves the
+    evidence sentence in the ledger permanently; `short` keeps one line of
+    candidates; `none` keeps nothing.
+    """
+
+    half_life_days: int = 180
+    max_candidates: int = 3
+    min_similarity: float = 0.35
+    min_support: int = 1
+    correction_weight: float = 1.0
+    acceptance_weight: float = 0.4
+    auto_accept_above: float = 0.0
+    metadata: str = ADVICE_SHORT
+
+
+@dataclass(frozen=True, slots=True)
 class SemanticConfig:
     """Milestone 2 settings; absent until the customer runs a model."""
 
@@ -89,6 +122,8 @@ class CustomerConfig:
     unknown_income: str
     config_dir: Path
     batch_folder: Path
+    journal: JournalConfig
+    advice: AdviceConfig
     semantic: SemanticConfig | None
 
     def sources_of(self, source_type: str) -> tuple[SourceInstance, ...]:
@@ -154,6 +189,8 @@ def load_customer_config(path: str | Path) -> CustomerConfig:
         unknown_income=unknown_income,
         config_dir=root,
         batch_folder=_batch_folder(raw.get("batch"), root),
+        journal=_journal(raw.get("journal"), root),
+        advice=_advice(raw.get("advice")),
         semantic=_semantic(raw.get("semantic"), root),
     )
 
@@ -270,6 +307,111 @@ def _batch_folder(value: object, root: Path) -> Path:
     if not isinstance(folder, str):
         raise CustomerConfigError("[batch].folder must be a string")
     return (root / folder).resolve()
+
+
+def _journal(value: object, root: Path) -> JournalConfig:
+    path = root / "decisions.jsonl"
+    if value is None:
+        return JournalConfig(path=path, enabled=True)
+    if not isinstance(value, dict):
+        raise CustomerConfigError("[journal] must be a table")
+    table = cast(dict[str, Any], value)
+    enabled = table.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise CustomerConfigError("[journal].enabled must be true or false")
+    raw_path = table.get("path", "")
+    if raw_path != "":
+        if not isinstance(raw_path, str):
+            raise CustomerConfigError("[journal].path must be a string")
+        path = (root / raw_path).resolve()
+    return JournalConfig(path=path, enabled=enabled)
+
+
+def _advice(value: object) -> AdviceConfig:
+    if value is None:
+        return AdviceConfig()
+    if not isinstance(value, dict):
+        raise CustomerConfigError("[advice] must be a table")
+    table = cast(dict[str, Any], value)
+    defaults = AdviceConfig()
+    unsupported = sorted(set(table) - _ADVICE_KEYS)
+    if unsupported:
+        raise CustomerConfigError(
+            f"[advice] has unsupported keys: {', '.join(unsupported)}"
+        )
+    return AdviceConfig(
+        half_life_days=_bounded_int(
+            table.get("half_life_days", defaults.half_life_days),
+            "[advice].half_life_days",
+            1,
+            36500,
+        ),
+        max_candidates=_bounded_int(
+            table.get("max_candidates", defaults.max_candidates),
+            "[advice].max_candidates",
+            1,
+            10,
+        ),
+        min_similarity=_fraction(
+            table.get("min_similarity", defaults.min_similarity),
+            "[advice].min_similarity",
+        ),
+        min_support=_bounded_int(
+            table.get("min_support", defaults.min_support),
+            "[advice].min_support",
+            1,
+            100,
+        ),
+        correction_weight=_fraction(
+            table.get("correction_weight", defaults.correction_weight),
+            "[advice].correction_weight",
+        ),
+        acceptance_weight=_fraction(
+            table.get("acceptance_weight", defaults.acceptance_weight),
+            "[advice].acceptance_weight",
+        ),
+        auto_accept_above=_fraction(
+            table.get("auto_accept_above", defaults.auto_accept_above),
+            "[advice].auto_accept_above",
+        ),
+        metadata=_advice_detail(table.get("metadata", defaults.metadata)),
+    )
+
+
+def _advice_detail(value: object) -> str:
+    if value not in ADVICE_DETAIL:
+        allowed = ", ".join(ADVICE_DETAIL)
+        raise CustomerConfigError(f"[advice].metadata must be one of: {allowed}")
+    return cast(str, value)
+
+
+_ADVICE_KEYS = {
+    "half_life_days",
+    "max_candidates",
+    "min_similarity",
+    "min_support",
+    "correction_weight",
+    "acceptance_weight",
+    "auto_accept_above",
+    "metadata",
+}
+
+
+def _bounded_int(value: object, label: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CustomerConfigError(f"{label} must be an integer")
+    if not low <= value <= high:
+        raise CustomerConfigError(f"{label} must be between {low} and {high}")
+    return value
+
+
+def _fraction(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise CustomerConfigError(f"{label} must be a number between 0 and 1")
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise CustomerConfigError(f"{label} must be between 0 and 1")
+    return number
 
 
 def _semantic(value: object, root: Path) -> SemanticConfig | None:

@@ -8,8 +8,8 @@ from pathlib import Path
 from beancount.core.amount import Amount
 from beancount.core.data import Posting, Transaction
 
-from bean_import.config import CsvImportConfig
-from bean_import.models import SourceRecord
+from bean_import.core.models import SourceRecord
+from bean_import.csv_demo.config import CsvImportConfig
 
 
 class MappingError(ValueError):

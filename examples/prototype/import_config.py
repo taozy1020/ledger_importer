@@ -6,8 +6,8 @@ statement in `[batch].folder`, so new downloads need no edit here.
 
 from pathlib import Path
 
-from bean_import.batch_importer import PlatformBatchImporter
-from bean_import.customer_config import load_customer_config
+from bean_import.app.fava import PlatformBatchImporter
+from bean_import.config.customer import load_customer_config
 
 ROOT = Path(__file__).resolve().parent
 LEDGER = ROOT / "ledger.toml"

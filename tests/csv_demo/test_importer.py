@@ -14,8 +14,8 @@ from beangulp.identify import (
 )
 from beangulp.importer import Importer
 
-from bean_import.config import CsvImportConfig
-from bean_import.importer import CsvMappingImporter
+from bean_import.csv_demo.config import CsvImportConfig
+from bean_import.csv_demo.importer import CsvMappingImporter
 
 identify_importer: Callable[[list[Importer], str], Importer | None] = cast(
     Callable[[list[Importer], str], Importer | None], _identify_importer

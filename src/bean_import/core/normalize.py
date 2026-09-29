@@ -7,8 +7,12 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from decimal import Decimal
 
-from bean_import.customer_config import CustomerConfig
-from bean_import.models import AccountingEvent, AccountRole, EventKind, SourceRecord
+from bean_import.core.models import (
+    AccountingEvent,
+    AccountRole,
+    EventKind,
+    SourceRecord,
+)
 
 CHANNEL_KEYWORDS = ("支付宝", "微信", "财付通", "快捷支付")
 PairPredicate = Callable[[SourceRecord, SourceRecord, int], bool]
@@ -20,7 +24,8 @@ class NormalizeError(ValueError):
 
 def normalize(
     records: Sequence[SourceRecord],
-    config: CustomerConfig,
+    *,
+    date_window_days: int,
 ) -> list[AccountingEvent]:
     """Merge unique card payments, repayments, and transfers; keep the rest."""
 
@@ -35,7 +40,7 @@ def normalize(
             remaining,
             consumed,
             ambiguous,
-            config.date_window_days,
+            date_window_days,
             _repayment_pair,
             _repayment_event,
         )
@@ -46,7 +51,7 @@ def normalize(
             remaining,
             consumed,
             ambiguous,
-            config.date_window_days,
+            date_window_days,
             _card_payment_pair,
             _card_payment_event,
         )
@@ -57,7 +62,7 @@ def normalize(
             remaining,
             consumed,
             ambiguous,
-            config.date_window_days,
+            date_window_days,
             _transfer_pair,
             _transfer_event,
         )

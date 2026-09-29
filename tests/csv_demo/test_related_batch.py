@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from beancount.core.data import Transaction
 
-from bean_import.config import CsvImportConfig
-from bean_import.related_batch import (
+from bean_import.csv_demo.config import CsvImportConfig
+from bean_import.csv_demo.related_batch import (
     RelatedBatchConfig,
     RelatedBatchError,
     RelatedBatchImporter,

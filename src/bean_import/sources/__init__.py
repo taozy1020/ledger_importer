@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bean_import.customer_config import CustomerConfig
-from bean_import.models import SourceRecord
+from bean_import.config.customer import CustomerConfig
+from bean_import.core.models import SourceRecord
 from bean_import.sources.alipay import parse_alipay
 from bean_import.sources.boc import parse_boc_credit, parse_boc_debit
 from bean_import.sources.common import SourceParseError, csv_rows, read_text

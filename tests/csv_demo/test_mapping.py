@@ -6,9 +6,9 @@ from decimal import Decimal
 import pytest
 from beancount.core.data import Transaction
 
-from bean_import.config import CsvImportConfig
-from bean_import.mapping import MappingError, map_record
-from bean_import.models import SourceRecord
+from bean_import.core.models import SourceRecord
+from bean_import.csv_demo.config import CsvImportConfig
+from bean_import.csv_demo.mapping import MappingError, map_record
 
 
 @pytest.fixture

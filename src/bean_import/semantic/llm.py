@@ -15,13 +15,19 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any, cast
 
-from bean_import.classify import (
-    ACCEPTED,
+from bean_import.core.advice import NO_ADVICE, Advice
+from bean_import.core.classification import (
     Classification,
     ClassificationRequest,
+    accept,
     unknown,
 )
-from bean_import.semantic.knowledge import LifeContext, describe_situation
+from bean_import.core.situation import situation_of
+from bean_import.semantic.knowledge import (
+    LifeContext,
+    describe_situation,
+    memory_from_advice,
+)
 
 Transport = Callable[[str, dict[str, Any], str], str]
 
@@ -50,22 +56,35 @@ class OpenAICompatibleClassifier:
         self.memory = memory
         self._transport = transport or urllib_transport
 
-    def context_for(self, request: ClassificationRequest) -> LifeContext:
-        """Fill the life skill with this transaction's situation and the memory."""
+    def context_for(
+        self,
+        request: ClassificationRequest,
+        advice: Advice = NO_ADVICE,
+    ) -> LifeContext:
+        """Fill the life skill with this transaction's situation and the memory.
+
+        Retrieved memory wins over the ledger summary when there is any: the
+        reviewer is looking at the same candidates, so the model should argue
+        with the evidence they can see rather than a different one.
+        """
 
         return LifeContext(
             skill=self.skill,
-            situation=describe_situation(request),
-            memory=self.memory,
+            situation=describe_situation(situation_of(request)),
+            memory=memory_from_advice(advice) or self.memory,
         )
 
-    def classify(self, request: ClassificationRequest) -> Classification:
+    def classify(
+        self,
+        request: ClassificationRequest,
+        advice: Advice = NO_ADVICE,
+    ) -> Classification:
         url = (
             self.endpoint
             if self.endpoint.endswith("/chat/completions")
             else f"{self.endpoint}/chat/completions"
         )
-        messages = _messages(request, self.context_for(request))
+        messages = _messages(request, self.context_for(request, advice))
         try:
             content = self._complete(url, messages)
         except ClassifierError as error:
@@ -91,13 +110,7 @@ class OpenAICompatibleClassifier:
         if parsed["uncertain"] or account not in request.allowed_accounts:
             reason = parsed["reason"] or "账户不在允许列表中"
             return unknown(request, reason, self.model)
-        return Classification(
-            account=account,
-            uncertain=False,
-            reason=parsed["reason"],
-            model_id=self.model,
-            status=ACCEPTED,
-        )
+        return accept(account, parsed["reason"], self.model)
 
     def _complete(self, url: str, messages: list[dict[str, str]]) -> str:
         payload: dict[str, Any] = {

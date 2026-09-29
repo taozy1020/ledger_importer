@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from bean_import.customer_config import CustomerConfig, SourceInstance
-from bean_import.models import SourceRecord
+from bean_import.config.customer import CustomerConfig, SourceInstance
+from bean_import.core.models import SourceRecord
 from bean_import.sources.common import (
     SourceParseError,
     blank,

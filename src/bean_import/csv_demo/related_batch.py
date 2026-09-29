@@ -13,10 +13,10 @@ from typing import cast
 from beancount.core.data import Directive, Transaction
 from beangulp.importer import Importer
 
-from bean_import.config import CsvImportConfig
-from bean_import.csv_source import read_records
-from bean_import.mapping import map_record
-from bean_import.models import SourceRecord
+from bean_import.core.models import SourceRecord
+from bean_import.csv_demo.config import CsvImportConfig
+from bean_import.csv_demo.csv_source import read_records
+from bean_import.csv_demo.mapping import map_record
 
 MAX_RELATED_FILE_BYTES = 8 * 1024 * 1024
 

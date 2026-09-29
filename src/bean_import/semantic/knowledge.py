@@ -1,44 +1,59 @@
-"""Life-context skill plus situation and memory extracted for each transaction."""
+"""What the model reads: a life skill, this moment, and what is remembered.
+
+Not a payee-to-account table. A person does not classify by brand; they
+classify by what they were doing. The skill is prose they wrote themselves, the
+situation is the time and money of this transaction, and the memory is what
+similar moments turned into before.
+"""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
 from decimal import Decimal
 
 from beancount.core.data import Directive, Transaction
 
-from bean_import.classify import ClassificationRequest
+from bean_import.core.advice import Advice
+from bean_import.core.situation import UNKNOWN_DAY_PART, WEEKDAYS, Situation
 
-WEEKDAYS = "一二三四五六日"
+NO_MEMORY = "账本里还没有可回忆的分类。请根据生活说明和这笔交易的时间、金额和渠道判断。"
 
 
 @dataclass(frozen=True, slots=True)
 class LifeContext:
-    """What the model should read instead of a payee-to-account table."""
+    """The three things put in front of the model, and nothing else."""
 
     skill: str
     situation: str
     memory: str
 
 
-def describe_situation(request: ClassificationRequest) -> str:
-    """Turn one request into the time, money, and channel the model reasons over."""
+def describe_situation(situation: Situation) -> str:
+    """Turn the shared feature view into the sentence the model reads."""
 
-    moment = _moment(request.occurred_at, request.transaction_date)
-    weekday = WEEKDAYS[moment.weekday()]
-    timed = _has_clock(request.occurred_at)
-    clock = moment.strftime("%H:%M") if timed else "时间未知"
-    day_part = _day_part(moment.hour) if timed else "时段未知"
+    clock = situation.clock or "时间未知"
+    part = situation.day_part if situation.day_part != UNKNOWN_DAY_PART else "时段未知"
     return (
-        f"{moment.date().isoformat()} 星期{weekday} {clock}，{day_part}，"
-        f"金额 {request.amount} {request.currency}。"
-        f"对手：{request.payee or '未知'}。"
-        f"说明：{request.narration or '无'}。"
-        f"平台分类：{request.source_category or '无'}。"
-        f"渠道：{'、'.join(request.source_types)}。"
+        f"{situation.on.isoformat()} 星期{WEEKDAYS[situation.weekday]} {clock}，"
+        f"{part}，金额 {situation.amount} {situation.currency}。"
+        f"对手：{situation.payee or '未知'}。"
+        f"说明：{situation.narration or '无'}。"
+        f"平台分类：{situation.source_category or '无'}。"
+        f"渠道：{'、'.join(situation.source_types)}。"
+    )
+
+
+def memory_from_advice(advice: Advice) -> str:
+    """Retrieved memory: the accounts similar moments actually became."""
+
+    if not advice.candidates:
+        return ""
+    return "\n".join(
+        f"{candidate.account}：{candidate.evidence}"
+        f"（相似度权重 {candidate.confidence:.2f}）"
+        for candidate in advice.candidates
     )
 
 
@@ -48,7 +63,11 @@ def memory_from_ledger(
     *,
     limit: int,
 ) -> str:
-    """Summarize how this person has actually lived in the ledger so far."""
+    """Cold-start memory, before the journal has settled anything.
+
+    Coarser than retrieval: it describes each account as a whole rather than
+    the moments that resemble this one.
+    """
 
     grouped: dict[str, list[Transaction]] = defaultdict(list)
     for entry in existing:
@@ -59,9 +78,7 @@ def memory_from_ledger(
                 grouped[posting.account].append(entry)
                 break
     if not grouped:
-        return (
-            "账本里还没有可回忆的分类。请根据生活说明和这笔交易的时间、金额和渠道判断。"
-        )
+        return NO_MEMORY
 
     lines: list[str] = []
     ranked = sorted(grouped, key=lambda account: len(grouped[account]), reverse=True)
@@ -82,53 +99,6 @@ def memory_from_ledger(
             f"出现在星期{'、'.join(weekdays)}。记得：{remembered}。"
         )
     return "\n".join(lines)
-
-
-def _moment(occurred_at: str, fallback: date) -> datetime:
-    text = occurred_at.strip()
-    if not text:
-        return datetime(fallback.year, fallback.month, fallback.day)
-    date_part, _, time_part = text.partition(" ")
-    try:
-        day = date.fromisoformat(date_part)
-    except ValueError:
-        day = fallback
-    clock = _clock(time_part)
-    if clock is None:
-        return datetime(day.year, day.month, day.day)
-    return datetime(day.year, day.month, day.day, clock[0], clock[1])
-
-
-def _has_clock(occurred_at: str) -> bool:
-    _, _, time_part = occurred_at.partition(" ")
-    return _clock(time_part) is not None
-
-
-def _clock(value: str) -> tuple[int, int] | None:
-    digits = value.strip().replace(":", "")
-    if len(digits) == 4 and digits.isdigit():
-        digits = f"{digits}00"
-    if len(digits) < 4 or not digits[:4].isdigit():
-        return None
-    hour = int(digits[0:2])
-    minute = int(digits[2:4])
-    if hour > 23 or minute > 59:
-        return None
-    return hour, minute
-
-
-def _day_part(hour: int) -> str:
-    if hour < 5:
-        return "深夜"
-    if hour < 10:
-        return "早晨"
-    if hour < 14:
-        return "中午"
-    if hour < 17:
-        return "下午"
-    if hour < 21:
-        return "晚上"
-    return "深夜"
 
 
 def _remembered_names(entries: Sequence[Transaction]) -> str:

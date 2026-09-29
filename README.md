@@ -91,15 +91,27 @@ bean-import-csv --help
 
 **里程碑 1（当前默认，不需要模型）。** 配对、方向、转账和信用卡还款全部由确定性代码判断。分类无法从账单本身确定时，按金额方向落到 `[unknown]` 配置的账户：支出进 `Expenses:Unknown`，收入进 `Income:Unknown`，交易照常平衡，在 Fava 里改账户。`examples/prototype/ledger.toml` 就是这一层的完整配置。
 
-**里程碑 2（可选）。** 语义分类在 `bean_import.classify.SemanticClassifier` 这一个接口后面，实现放在 `bean_import/semantic/`。生活分类说明写在 Markdown skill 里，例如 `examples/prototype/skills/food.md`：按外卖、简餐、买菜、餐厅大餐描述时间和生活场景，而不是按商户名做对照表。导入时抽出这笔交易的星期、钟点、金额和渠道，并从已有账本归纳每个账户的记忆，和 skill 一起送给本地模型。配置见 `examples/prototype/ledger-with-model.toml`：加一张 `[semantic]` 表，Ollama 的 OpenAI 兼容地址是 `http://127.0.0.1:11434/v1`，本地模型不需要 API key。删掉这张表就退回里程碑 1。
+**未定分类不是死胡同，是人做决定的时刻。** 每次导入都会把当时的情境和提议记进决策日志 `decisions.jsonl`；审核完之后跑 `bean-import-learn`，它按交易 metadata 里的 `event_id` 回到账本，看你最后写了什么，并把结果写回日志。原始账单这时可以删掉——学习信号不在账单里，而在「提议」和「你的决定」的差值里。
+
+下一次遇到相似场合，未定账户的交易会带上候选，例如 `candidates: "Expenses:Food:Quick 0.36"`。账户仍然留空，系统只是把你自己以前的决定摆在眼前。修正的权重明显高于沉默接受，避免系统用自己的输出确认自己。想让它在证据足够时直接填上，把 `[advice].auto_accept_above` 调到 0 以上。
+
+写进 metadata 的东西会被 Fava 一起存进账本、永久留下，所以 `[advice].metadata` 决定账本愿意留多少：`short`（默认）只留一行候选，`full` 连置信度和整句证据一起留，`none` 什么都不留。同样的理由，未定账户的交易**不打标签**——标签是导入那一刻写的，你改完账户之后它还在；筛选待办直接筛 `Expenses:Unknown` 账户。
+
+**里程碑 2（可选）。** 语义分类在 `bean_import.core.ports.SemanticClassifier` 这一个接口后面，实现放在 `bean_import/semantic/`。生活分类说明写在 Markdown skill 里，例如 `examples/prototype/skills/food.md`：按外卖、简餐、买菜、餐厅大餐描述时间和生活场景，而不是按商户名做对照表。导入时抽出这笔交易的星期、钟点、金额和渠道，连同检索到的相似历史一起送给本地模型。配置见 `examples/prototype/ledger-with-model.toml`：加一张 `[semantic]` 表，Ollama 的 OpenAI 兼容地址是 `http://127.0.0.1:11434/v1`，本地模型不需要 API key。删掉这张表就退回里程碑 1。
 
 ```sh
 uv run bean-import-batch \
   --config examples/prototype/ledger.toml \
   --output /tmp/prototype.bean
+
+uv run bean-import-learn \
+  --config examples/prototype/ledger.toml \
+  --ledger examples/prototype/main.bean
 ```
 
-不带文件参数就导入 `[batch].folder`；也可以显式传文件或另一个文件夹。
+导入不带文件参数就读 `[batch].folder`；也可以显式传文件或另一个文件夹。`bean-import-learn` 会分开统计两件事：**系统提议了账户、你保留或改掉**（这才算覆盖率和命中率），以及**系统弃权、你自己填了一个**（这是白送的标注）。里程碑 1 从不提议，所以它老实报「覆盖率 0%」并告诉你攒下了多少样本，而不是假装自己是个次次猜错的分类器。
+
+把账单反复下载进同一个文件夹是安全的：重复判定按交易 metadata 里的 `event_id` 精确比对，而不是按账户和金额，所以你在 Fava 里改过账户、甚至把一笔拆成几个账户之后，它仍然认得出这是同一笔。
 
 Fava 示例：
 
@@ -120,16 +132,26 @@ uv run bean-import-csv \
 
 例子把 CSV 的 `amount` 当作银行账户视角的带符号金额：支出为负，收入为正。映射器对每条记录生成两条 posting：银行账户 posting 保留 CSV 金额，类别对应的费用/收入 posting 取相反数，因此分录平衡。类别没有映射时会报错，不会猜账户。CSV 导出的 `.bean` 是分录片段，目标账户需要已在账本中 `open`；独立运行 `bean-check` 时需提供相应账户定义。
 
-## 核心代码怎么走
+## 代码结构
 
-- `models.py` 定义来源行 `SourceRecord`，原始 CSV 字段也一并保留。
-- `csv_source.py` 只负责文件解析、字段校验、日期/金额转换和稳定来源 ID，不负责分类或会计决策。
-- `mapping.py` 是核心纯转换：`SourceRecord + CsvImportConfig -> Beancount Transaction`。金额使用 `Decimal`，并保留来源 ID、文件行和原始内容供追溯。
-- `importer.py` 把上述逻辑包装成 Beangulp importer 接口，因此可以由 Fava Import 调用。
-- `related_batch.py` 由一个 JSON manifest 引用两份 CSV；只在一对一证据充分时合并银行与支付宝记录，并单独导入余额支付。
-- `cli.py` 提供独立、可重复运行的 CSV 到 `.bean` 转换入口，便于观察输出和做测试。
+每一层只能依赖它下面的层，这条规则由 `tests/test_architecture.py` 用 AST 检查，不是靠自觉。
 
-建议按 `tests/test_mapping.py` 里的支出/收入例子跟读金额符号；测试刻意覆盖未知类别拒绝推测。
+| 目录 | 作用 | 依赖 |
+| --- | --- | --- |
+| `core/` | 领域模型、五个端口协议、归一化、渲染。没有文件 IO、网络和时钟 | 无 |
+| `config/` | TOML → `CustomerConfig` | core |
+| `sources/` | 账单文件 → `SourceRecord`，含文件头身份识别 | core, config |
+| `journal/` | 决策日志：JSONL / 内存 / 空实现 | core |
+| `advice/` | 从历史决策给候选账户与置信度 | core |
+| `learning/` | 按 `event_id` 从账本回收人工决策，并评分 | core |
+| `semantic/` | 可选的模型调用 | core |
+| `clock/` | 唯一读系统时间的地方 | core |
+| `app/` | 组装：`factory` / `pipeline` / `fava` / `cli` | 全部 |
+| `csv_demo/` | 0.1 的 CSV 样例，自成一体 | core |
+
+所有可替换的缝隙集中在 `core/ports.py`，每个协议都有一个简单到可以当 mock 用的实现（`NullAdvisor`、`InMemoryJournal`、`FixedClock` 等）。`import_files(..., components=...)` 接受任意一套实现，因此每个模块都能单独测。
+
+建议从 `doc/prototype-review-guide.md` 开始读；`tests/app/test_learning_loop.py` 是一条完整闭环，从提议一直走到「下次给出候选」。
 
 ## CSV 字段与映射
 

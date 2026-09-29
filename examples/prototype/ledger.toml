@@ -38,6 +38,23 @@ account = "Liabilities:CreditCard:BOC"
 expense = "Expenses:Unknown"
 income = "Income:Unknown"
 
+# 决策日志：记下每次提议，之后用 bean-import-learn 把你的选择回收进来。
+# 默认就是下面这样，写出来只是为了让它可见。
+[journal]
+enabled = true
+path = "decisions.jsonl"
+
+# 历史候选：审核时在 metadata 里给出「以前类似场合你选了什么」。
+# auto_accept_above = 0 表示永远只提示、不替你填账户。
+[advice]
+half_life_days = 180
+max_candidates = 3
+correction_weight = 1.0
+acceptance_weight = 0.4
+auto_accept_above = 0.0
+# 候选写进账本后就永久留在那里。short 只留一行候选，full 连证据句一起留，none 什么都不留。
+metadata = "short"
+
 [roles]
 expense = [
   "Expenses:Food:Delivery",

@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Decision journals written beside a ledger
+decisions.jsonl
+decisions.jsonl.tmp

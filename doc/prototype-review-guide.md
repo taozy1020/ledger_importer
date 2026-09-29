@@ -1,28 +1,29 @@
 # 平台账单原型：设计与代码阅读指引
 
-**对象：** `examples/prototype/` 这条流水线，以及它依赖的 `src/bean_import/` 模块
+**对象：** `src/bean_import/` 全部模块，以及 `examples/prototype/` 这条可以真跑的流水线
 **分支：** `dev`
-**日期：** 2026-09-28
+**日期：** 2026-09-29
 
 这份文档是给 review 用的。它回答三件事：这套东西跑起来是什么样、每一层负责什么、读代码时该在哪儿停下来提问。
 
-0.1 预研的 CSV 样例（`csv_source.py`、`mapping.py`、`importer.py`、`related_batch.py`）不在这份文档范围内，它们由 [code-reading-guide.md](code-reading-guide.md) 描述，本次改动没有动它们。
+0.1 预研的 CSV 样例现在收在 `src/bean_import/csv_demo/` 里，自成一体，本文不展开，见 [code-reading-guide.md](code-reading-guide.md)。
 
 ---
 
 ## 1. 怎么用这份文档
 
-建议按这个顺序：
+1. 第 2 节，先跑起来，看见输出再读代码。
+2. 第 3 节，全景图。
+3. 第 4 节，**分层规则和端口**。这是本次改动的主要设计意图；不理解这条，后面每个文件的取舍都会显得随意。
+4. 第 5 节，五个数据契约。契约看懂了，中间的函数基本可预测。
+5. 第 6 节，按阶段读代码。每个阶段末尾有「review 时问什么」。
+6. 第 7 节，跟着一笔真实交易走完「提议 → 人工修正 → 回收 → 下次更好」的完整闭环。
+7. 第 8 节，**在 Fava 里真跑三个月之后，哪些假设站住了、哪些被打脸了**。如果你只想看一节，看这节。
+8. 第 9 到 12 节：测试地图、已知弱点、检查清单、文件索引。
 
-1. 第 2 节，先把它跑起来，看见输出再读代码。
-2. 第 3 节，看一眼全景图，知道一次导入被切成了几段。
-3. 第 4 节，理解分层规则。这是这次改动的主要设计意图，不理解这条，后面每个文件的取舍都会显得随意。
-4. 第 5 节，读四个数据契约。契约看懂了，中间的函数基本是可预测的。
-5. 第 6 节，按阶段读代码。每个阶段末尾有「review 时问什么」，那是我认为值得你挑战的地方。
-6. 第 7 节，跟着一笔真实交易从两份账单走到最终分录。
-7. 第 9 节和第 10 节，测试地图和我自己知道的弱点。
+想自己动手验一遍而不是读结论，直接看 [人工验收步骤](manual-test.md)：十个场景，每步写明在界面上做什么、该看到什么数字。
 
-全部代码约 1900 行（不含 0.1 样例和测试），一次完整阅读大约 1.5 小时。
+源码约 2600 行（不含 0.1 样例和测试），一次完整阅读约 2 小时。
 
 ---
 
@@ -32,12 +33,12 @@
 
 ```sh
 uv sync --group dev --extra fava
-uv run ruff check . && uv run pyright && uv run pytest
+uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
 ```
 
-当前状态：27 个测试通过，ruff 和 pyright 无告警。
+当前状态：119 个测试通过，ruff / ruff format / pyright 均无告警。
 
-### 2.2 命令行
+### 2.2 导入
 
 ```sh
 uv run bean-import-batch \
@@ -45,7 +46,7 @@ uv run bean-import-batch \
   --output /tmp/prototype.bean
 ```
 
-不带文件参数，读的是配置里的 `[batch].folder`。输出 5 笔交易：
+不带文件参数时读配置里的 `[batch].folder`。四份账单共 7 行原始记录，合成 5 条事件：
 
 | 日期 | 摘要 | 事件类型 | 分类 | posting |
 | --- | --- | --- | --- | --- |
@@ -55,24 +56,62 @@ uv run bean-import-batch \
 | 2026-09-05 | 中国银行 / 信用卡还款 | repayment | structural | 借记 -200.00，信用卡 +200.00 |
 | 2026-09-06 | 微信 / 零钱提现 | transfer | structural | 零钱 -50.00，借记 +50.00 |
 
-四份账单一共 7 行原始记录，合成 5 条事件：支付宝那笔和中行借记卡那笔被认成同一次消费，还款的两行被认成同一次还款。
+支付宝那笔和中行借记卡那笔被认成同一次消费；还款的两行被认成同一次还款。
 
-### 2.3 Fava
+### 2.3 回收人工决策
+
+在 Fava（或任何编辑器）里把 `Expenses:Unknown` 改成真实账户并保存，然后：
+
+```sh
+uv run bean-import-learn \
+  --config examples/prototype/ledger.toml \
+  --ledger examples/prototype/main.bean
+```
+
+实测输出：
+
+```
+检查 3 条提议，新结算 3 条，待定 0 条
+
+记录 3 条，已结算 3 条，待定 0 条
+接受 0，修正 2，仍未知 1，拆分 0
+覆盖率 67%，命中率 0%
+
+账户                                    提议    接受    修正    最终
+Expenses:Food:Quick                    0     0     0     2
+Expenses:Unknown                       2     0     2     1
+
+最常见的修正：
+  Expenses:Unknown -> Expenses:Food:Quick × 2
+```
+
+命中率 0% 是对的：里程碑 1 从不提议具体账户，所以它每一次都「输」。这个数字存在的意义是，等模型或历史开始提议时，它会立刻变成可比较的基线。
+
+### 2.4 下一次导入
+
+再下载一份类似账单，重跑 2.2，新交易的 metadata 会多出三行：
+
+```
+candidates: "Expenses:Food:Quick 0.36"
+confidence: "0.36"
+candidate_evidence: "1 笔相似记录；最近 2026-09-03；对手相同、名称相近、平台分类相同、中午、工作日、金额相当；如 兰州拉面"
+```
+
+账户仍然是 `Expenses:Unknown`——**系统没有替你决定**，它只是把你自己以前的决定摆在你眼前。
+
+### 2.5 Fava
 
 ```sh
 uv run fava examples/prototype/main.bean
 ```
 
-已实测的完整链路（Fava 1.30.16）：
+已实测（Fava 1.30.16）：
 
-1. 加载 `main.bean` 无错误。
-2. 导入页只有一个可导入条目，就是 `ledger.toml` 本身，importer 名字是 `Statement folder statements`。`statements/` 里的四份 CSV 都显示「无 importer」，不会被当成四批独立账单。
-3. 提取得到上表那 5 笔，metadata 完整（`event_id`、`source_id`、`filename`、`lineno`、`classification`）。
-4. 保存后写入 `imported.bean`（由该文件里的 `insert-entry` 选项路由），主账 `main.bean` 不被修改。
-5. 重新加载，`api/errors` 为空，账本里出现 `Expenses:Unknown` 和 `Income:Unknown`。
-6. **再次对同一文件夹执行提取，5 笔全部被 Fava 标成 duplicate。** 所以把账单反复下载进同一个文件夹是安全的，不会重复入账。
-
-第 4 步之后 `imported.bean` 的内容和 CLI 输出一致，只是 metadata 按字母序重排、posting 对齐方式不同，这是 Fava 的 printer 行为。
+1. 导入页只有一个可导入条目，就是 `ledger.toml` 本身，importer 名字是 `Statement folder statements`。`statements/` 里的 CSV 都显示「无 importer」，不会被当成多批账单。
+2. 提取得到上表那几笔，metadata 完整，`candidates` 直接显示在预览里。
+3. 保存写入 `imported.bean`（若未配置 `insert-entry`，Fava 会追加到主账文件），accounts 不被修改。
+4. 待办清单不是标签，是账户：在 Fava 里筛 `Expenses:Unknown` 就是「今天要处理的」。早期版本写过 `#needs-review` 标签，实测发现它在你改完账户之后仍然留在账本里，反而把已处理的和没处理的混在一起，已经删掉。
+5. 再次提取同一文件夹，八笔全部被标成 duplicate——**包括你上一轮亲手改过账户的那几笔**。这一条是实测出来的坑：beangulp 默认按「账户 + 金额」判重，而审核恰恰就是在改账户，所以第一次审核之后原本的判重就失效了。现在改成先按 `event_id` 精确判重（`app/fava.py::mark_known_events`），`event_id` 只由账单原始行算出，你在账本这边怎么改都不影响它。所以「把账单反复下载进同一个文件夹」确实是安全的，但安全来自这个补丁，不是来自 beangulp 的默认行为。
 
 ---
 
@@ -81,441 +120,383 @@ uv run fava examples/prototype/main.bean
 ```mermaid
 flowchart TB
     A[账单文件夹] --> B[scan_folder 挑出能识别的账单]
-    B --> C[detect_kind 判断这是哪种账单]
+    B --> C[detect_kind 判断账单类型]
     C --> D[resolve_source 按文件头决定属于哪个平台账号]
     D --> E[parse_* 解析成 SourceRecord]
     E --> F[normalize 跨来源配对]
     F --> G[AccountingEvent：类型 + 已知 posting + 待填角色]
     G --> H{unresolved_role?}
-    H -- 无 --> J[render_event structural]
-    H -- 有 --> I[SemanticClassifier.classify]
-    I --> J[render_event]
-    J --> K[Beancount Transaction]
-    K --> L[Fava 审核并写入 imported.bean]
+    H -- 无 --> N[render_event structural]
+    H -- 有 --> I[situation_of 抽取情境特征]
+    I --> J[AccountAdvisor.advise 从历史给候选]
+    J --> K[SemanticClassifier.classify]
+    K --> N[render_event 写入候选与置信度]
+    N --> O[Beancount Transaction]
+    O --> P[Fava 审核，人做决定]
+    P --> Q[ledger 里留下 event_id]
+    Q --> R[bean-import-learn 按 event_id 回收]
+    R --> S[(decisions.jsonl)]
+    J -.读取.-> S
+    K -.读取.-> S
 ```
 
-一句话：**能从账单本身算出来的，代码算；算不出来的，要么留给人，要么留给模型，但绝不猜。**
+两句话：
+
+- **能从账单本身算出来的，代码算；算不出来的，绝不猜。**
+- **人做的每一个决定都要能被找回来。** 找回的方式是账本里的 `event_id`，不是原始账单——账单早就删了。
 
 ---
 
-## 4. 分层与里程碑
+## 4. 分层与端口
 
-这是本次设计的核心。两个里程碑不是排期，是模块边界。
+### 4.1 依赖方向
 
-| | 里程碑 1（当前默认） | 里程碑 2（可选） |
+每一层只能依赖它下面的层。这条规则不是写在文档里，是 `tests/test_architecture.py` 用 AST 检查的。
+
+```
+app          组装：pipeline / factory / fava / cli        ← 唯一允许认识多个适配器的层
+ ├── sources     账单文件 → SourceRecord                   （依赖 core, config）
+ ├── config      TOML → CustomerConfig                     （依赖 core）
+ ├── journal     决策日志：JSONL / 内存 / 空实现            （依赖 core）
+ ├── advice      从历史决策给候选账户                        （依赖 core）
+ ├── learning    从账本回收人工决策 + 评分                    （依赖 core）
+ ├── semantic    可选的模型调用                              （依赖 core）
+ └── clock       唯一读系统时间的地方                         （依赖 core）
+core         领域模型、端口协议、归一化、渲染                  （不依赖任何人）
+```
+
+`core` 里没有任何文件 IO、网络和时钟读取。`csv_demo` 是 0.1 的样例，只依赖 `core`，跟上面这张图互不干扰。
+
+### 4.2 端口
+
+所有缝隙集中在一个文件 `core/ports.py`。每个协议至少有两个实现，其中一个简单到可以直接当 mock 用：
+
+| 协议 | 实现 | 替换它意味着 |
 | --- | --- | --- |
-| 做什么 | 解析、身份识别、跨来源配对、事件类型、转账/还款、渲染、Fava 入口 | 生活 skill、情境抽取、账本记忆、模型调用、账户校验 |
-| 代码 | `sources/`、`normalize.py`、`render.py`、`classify.py`、`pipeline.py`、`batch_*.py` | `semantic/knowledge.py`、`semantic/llm.py` |
-| 配置 | `ledger.toml`，必须有 `[unknown]` | 追加一张 `[semantic]` 表 |
-| 分类结果 | 按金额方向落到 unknown 账户 | 模型在允许账户里选，失败退回 unknown |
+| `SemanticClassifier` | `UnknownClassifier` / `HistoryClassifier` / `OpenAICompatibleClassifier` / `FirstResolved` 组合 | 换一个模型，或者根本不用模型 |
+| `AccountAdvisor` | `NullAdvisor` / `HistoryAdvisor` | 换一套记忆检索，甚至换成向量库 |
+| `DecisionJournal` | `NullJournal` / `InMemoryJournal` / `JsonlJournal` | 换存储，或者完全关掉 |
+| `LedgerOutcomes` | `DirectiveOutcomes` / `LedgerFile` | 换账本读取方式 |
+| `Clock` | `FixedClock` / `SystemClock` | 测试里把时间钉死 |
 
-依赖规则，review 时可以直接验证：
+`app/factory.py` 是唯一把它们拼起来的地方。`import_files(..., components=...)` 接受任意一套实现，所以任何一层都可以被单独测：`tests/app/test_pipeline.py` 就是用三行 mock 把整条流水线跑通的。
 
-- 确定性模块**不导入** `bean_import.semantic`。可以用 `rg "bean_import.semantic" src/` 检查，只有 `pipeline.py` 会命中，而且是在 `build_classifier` 里的函数内导入。
-- 删掉整个 `src/bean_import/semantic/` 目录，里程碑 1 仍然能跑（前提是配置里没有 `[semantic]`）。
-- 唯一的接口在 `classify.py`：
+### 4.3 里程碑仍然是物理边界
 
-```53:64:src/bean_import/classify.py
+| | 里程碑 1（默认） | 里程碑 1.5（可选） | 里程碑 2（可选） |
+| --- | --- | --- | --- |
+| 做什么 | 解析、身份识别、配对、渲染、记日志 | 历史候选达到阈值就自动填 | 模型在允许账户里选 |
+| 开关 | 无需配置 | `[advice].auto_accept_above > 0` | 出现 `[semantic]` 表 |
+| 代码 | `core/` `config/` `sources/` `journal/` `advice/` `learning/` `app/` | `advice/classifier.py` | `semantic/` |
+
+可以直接验证的两条：
+
+- `rg "bean_import.semantic" src/` 只命中 `app/factory.py`，而且是函数内导入。`tests/test_architecture.py::test_only_the_composition_root_mentions_the_model_and_only_lazily` 用 AST 保证这一点。
+- 删掉整个 `src/bean_import/semantic/` 目录，里程碑 1 照常工作。
+
+---
+
+## 5. 五个数据契约
+
+读懂这五个 dataclass，中间的函数基本可预测。
+
+### 5.1 `SourceRecord`（`core/models.py`）
+
+一行原始账单，不可变。金额是**站在出资账户视角的有符号 Decimal**，支出为负。
+
+### 5.2 `AccountingEvent`（`core/models.py`）
+
+一次经济活动，可能由多行账单合成。关键字段是 `unresolved_role`：
+
+- `None` —— 两边账户都确定（还款、转账），没有任何东西需要猜。
+- `"expense_account"` / `"income_account"` —— 缺一个对方账户，且方向已经由金额正负确定。
+
+### 5.3 `ClassificationRequest`（`core/classification.py`）
+
+分类器**唯一**能看到的事实。它不包含原始行，也不包含其它交易。`allowed_accounts` 是账本允许的账户白名单，`known_accounts` 是结构上已经确定的那一边。
+
+### 5.4 `Situation`（`core/situation.py`）
+
+同一笔交易的**特征视图**：星期、时钟、时段、是否周末、金额与绝对值、对手、说明、平台分类、渠道、分词。
+
+这个类型存在的理由是一致性：给模型看的情境、给相似度打分的特征、写进日志的快照，必须是同一份。三处各算一遍，学到的东西和当时看到的东西就会悄悄错位。
+
+### 5.5 `JournalEntry`（`core/journal.py`）
+
+一条提议，以及后来知道的决定：
+
+```
+Situation（当时看到的）
+known_accounts / allowed_accounts / unknown_account（当时的约束）
+Proposal（提了什么、来自谁、多有把握、候选是什么）
+Decision | None（人最后写了什么）
+```
+
+`Decision.outcome` 只有四种，信号强度完全不同：
+
+| outcome | 含义 | 学习权重 |
+| --- | --- | --- |
+| `corrected` | 人明确改成了别的账户 | 最高（默认 1.0） |
+| `accepted` | 人保留了提议 | 较低（默认 0.4） |
+| `abstained` | 人也留在 unknown | 0，这是弃权不是答案 |
+| `split` | 拆成多个账户或改了金额 | 0，记录但不训练 |
+
+`accepted` 权重必须明显低于 `corrected`，否则系统会把「用户懒得改」当成「用户认可」，然后用自己的输出训练自己。
+
+---
+
+## 6. 按阶段读代码
+
+### 阶段 1：文件夹 → 账单清单（`app/fava.py`）
+
+`scan_folder` 把一个目录切成「能识别的账单」和「跳过的文件」。`.pdf`/`.eml`/`.zip`/`.toml`/`.bean`/`.md`/`.json` 直接跳过；超过 8 MB 的文件是报错而不是跳过。
+
+Fava 只会用单个文件路径调 importer，所以对 Fava 可见的那个「文件」就是 `ledger.toml` 本身：认出它，等于「导入它指向的文件夹里的一切」。这样新账单到来时不需要编辑任何清单。
+
+> **review 时问什么**：把 `ledger.toml` 当成导入入口是不是太绕？替代方案是维护一份 batch 清单，但那要求每次下载后改文件。
+
+### 阶段 2：身份识别（`sources/identity.py`）
+
+从账单前 4000 字符里抽身份：微信 `微信昵称：[xxx]`、支付宝 `姓名：` 和 `支付宝账户：157**********`、中行借记卡 `客户姓名：` 和 19 位卡号。
+
+`match_rank` 分三档：3 = 规范化后完全相同，2 = 双方都有 ≥8 位数字且后四位相同，1 = 子串。**只取最高档**，平局或零匹配一律报错。
+
+> **review 时问什么**：分档是必需的——`小明` 是 `小明工作号` 的子串，不分档就会抢走对方的账单。中行信用卡账单没有持卡人身份，只有每行的卡号后四位，所以信用卡多账户目前靠 `[[cards]]` 而不是 `identity`。
+
+### 阶段 3：解析（`sources/wechat.py` / `alipay.py` / `boc.py`）
+
+每个解析器只做一件事：把一种账单变成 `SourceRecord`。支付宝的 GBK 编码、微信的 `¥` 前缀、中行的 `------` 占位符都在这里吸收。
+
+### 阶段 4：跨来源配对（`core/normalize.py`）
+
+三种配对，全部要求**唯一 1-1**：钱包侧的银行卡支付 ↔ 银行侧的清算；借记卡流出 + 信用卡流入且含「还款」→ 还款；微信提现/充值且对手卡已知 → 转账。
+
+任何一个方向有多个候选，就都不合并，各自保留，写上 `link_candidates` 和 `ambiguous-link` 标签。
+
+> **review 时问什么**：合并后日期和金额取银行侧，对手和说明取钱包侧，`occurred_at` 取带冒号的那个。这个取舍对不对？
+
+### 阶段 5：情境抽取（`core/situation.py`）
+
+`situation_of(request)` 是纯函数。中文分词用的是字符二元组而不是分词器：`瑞幸咖啡` 和 `瑞幸咖啡(中关村店)` 因此能重合，代价是引入了一点噪声。
+
+### 阶段 6：候选（`advice/`）
+
+`HistoryAdvisor` 读已结算的日志，对每条算：
+
+```
+score = 相似度 × 结果权重 × 0.5 ** (天数 / 半衰期)
+```
+
+相似度（`advice/similarity.py`）是七项加权：对手相同 4、分词重合 3、平台分类相同 1.5、金额接近 1.5、时段相同 1、渠道重合 1、工作日/周末相同 0.5。金额按**比值**衰减而不是差值，四倍以外归零。
+
+置信度做了两次处理：
+
+- 份额：`该账户得分 / 全部得分`
+- 饱和：`总分 / (总分 + 1.5)`
+
+所以「只有一条很像的记录」不会变成 100% 的把握，只会变成 0.4 左右。这一条是刻意的：给人看的数字必须诚实，否则它很快就会被忽略。
+
+> **review 时问什么**：七项权重是我拍的，没有调参。半衰期 180 天也是。这些应该由 `bean-import-learn` 的命中率来验证，而不是靠直觉——目前还没做自动调参，这是有意的，样本量太小时调参就是过拟合。
+
+### 阶段 7：分类（`core/classifiers.py` / `advice/classifier.py` / `semantic/llm.py`）
+
+一个接口：
+
+```40:48:src/bean_import/core/ports.py
 class SemanticClassifier(Protocol):
-    def classify(self, request: ClassificationRequest) -> Classification:
+    def classify(
+        self,
+        request: ClassificationRequest,
+        advice: Advice,
+    ) -> Classification:
         """Choose one allowed account, or the unknown account when unsafe."""
 
         ...
-
-
-class UnknownClassifier:
-    """Milestone 1: keep the direction that is certain, refuse to invent a category."""
-
-    def classify(self, request: ClassificationRequest) -> Classification:
-        return unknown(request, "未启用语义分类，按金额方向归入未知账户")
 ```
 
-`UnknownClassifier` 不是占位符，它是里程碑 1 的正式实现：方向是确定的（金额为负就是支出），类别是不确定的，所以只给出方向。
+`FirstResolved` 把若干分类器串起来，第一个给出结论的胜出，最后一环永远是 `UnknownClassifier`。所有失败路径——调用失败、JSON 重试一次仍然坏、模型自称不确定、选了白名单外的账户——都收敛到同一个 `unknown()`，只是 `reason` 不同。
 
-**review 时问什么**
+模型永远不可能让导入失败，也不可能产生账本里不存在的账户。
 
-- 接口只有一个方法、一个请求结构、一个返回结构，够不够将来换实现？如果以后想要「一次分类一批交易」以省 token，这个接口要怎么改？
-- `Classification.status` 目前是 `"accepted"` / `"unknown"` 两个字符串常量。要不要改成枚举？
+### 阶段 8：渲染（`core/render.py`）
 
----
+未定账户的交易额外带上 `candidates`：「你以前在很像的场合选过什么、有多像」。审核的人不需要重新打开账单就能决定，这就是「人工选择时的信心」的全部实现。
 
-## 5. 四个数据契约
+这里有一个实测教训：**Fava 保存的就是你看到的那条交易，所以写进 metadata 的东西会永久留在账本里**。第一版把置信度和一整句中文证据（「1 笔相似记录；最近 2026-10-05；对手相同、名称相近、平台分类相同、晚上、工作日、金额相当」）都写进去，结果每一笔咖啡下面都挂着一段只对那一次审核有用的散文。现在由 `[advice].metadata` 决定账本愿意留多少：
 
-读懂这四个，中间的函数就没有秘密了。
-
-### 5.1 `SourceRecord`（`models.py`）
-
-一份账单里的一行，解析后就不可变。
-
-| 字段 | 含义 | 谁填 |
-| --- | --- | --- |
-| `source_id` | 平台流水号，没有就用原始列的 SHA-256 指纹 | 适配器 |
-| `row_number` / `source_file` | 回溯定位 | 适配器 |
-| `transaction_date` | 记账日期 | 适配器 |
-| `occurred_at` | 原始时间戳字符串，可能带钟点 | 适配器 |
-| `amount` | **资金账户视角的带符号 Decimal**，流出为负 | 适配器统一符号 |
-| `source_account` | 这一行的钱从哪个账户走 | 适配器 + 配置 |
-| `card_tail` / `counter_account` | 跨来源配对用的线索 | 适配器 |
-| `funding_method` / `status` / `category` | 平台原文，供配对和提示 | 适配器 |
-| `raw_fields` | 原始列，只读 | 适配器 |
-
-关键约定：符号在适配器里就统一好。下游再也不用关心「支付宝的支出列是正数还是负数」。
-
-### 5.2 `AccountingEvent`（`models.py`）
-
-一次经济活动，可能由多行证据合成。它还不是 Beancount 交易。
-
-| 字段 | 含义 |
+| 取值 | 留下什么 |
 | --- | --- |
-| `event_id` | 由排序后的 evidence id + normalizer 版本生成，输入相同则 id 相同 |
-| `kind` | expense / income / transfer / refund / repayment |
-| `evidence_ids` | 一条或多条 `source_id` |
-| `postings` | **已经确定的** (账户, 金额) 对 |
-| `unresolved_role` | `expense_account` / `income_account` / `None`。为 `None` 就不进分类器 |
-| `link_candidates` / `flags` | 配对含糊时的候选和审核标记 |
-| `occurred_at` | 多条证据里最完整的那个时间戳 |
+| `none` | 什么都不留 |
+| `short`（默认） | 只留一行 `candidates` |
+| `full` | 连 `confidence`、`candidate_evidence`、弃权理由一起留 |
 
-### 5.3 `ClassificationRequest`（`classify.py`）
+`classification_reason` 单独有一条规则：**弃权的理由是每行都一样的套话，默认不写；模型真的选了某个账户时的理由不是，永远写**。后者是你日后回头问「它当时凭什么这么判」的唯一线索。
 
-分类器能看到的全部事实。注意它**不含** skill、记忆、情境字符串——那些是语义层自己拼的，核心层不认识它们。
+同样出于「写进去就是永久」的考虑，这里不再打 `#needs-review` 标签。标签是在导入那一刻写下的，它没法知道你在同一次审核里已经把账户改好了；而 `Expenses:Unknown` 这个账户本身永远是准确的筛选条件。
 
-`event_id`、`kind`、`role`、`transaction_date`、`occurred_at`、`amount`、`currency`、`payee`、`narration`、`source_category`、`source_types`、`allowed_accounts`、`unknown_account`。
+### 阶段 9：记日志（`journal/`）
 
-### 5.4 `Classification`（`classify.py`）
+JSONL，只追加。读的时候按 `event_id` 去重，`merge()` 决定同一件事的两条记录怎么合并，它挡住了两个先后踩到的坑：
 
-`account`、`uncertain`、`reason`、`model_id`、`status`。`status` 只有 `accepted` 和 `unknown` 两种。
+1. **重新导入不能抹掉已经回收到的人工决策。**（冒烟测试发现）
+2. **已经结算的记录必须整条冻结，连「我们当时提议了什么」也不许改写。**（free style 测试发现）第二条更隐蔽：重新导入会把整条流水线重跑一遍，而这时候顾问已经从你那次修正里学到了东西，于是它提议的正是你当初选的那个账户——可是没有任何人看过这条提议，因为 Fava 把这一行列为 duplicate，根本不会再送到你眼前。如果让它覆盖原记录，我们就是在拿已经知道的答案给自己打分，而且每重新导入一次分数就涨一点。实测中这让「命中率」凭空变成 80%，实际上系统一次都没提议过。
+
+`settle()` 会把文件重写成紧凑形式，走临时文件 + 原子替换。
+
+### 阶段 10：回收与评分（`learning/`）
+
+`learning/ledger.py` 按 `event_id` 索引账本里的交易。`core/journal.py::judge` 是纯函数：账本里除 `known_accounts` 之外剩下的账户，恰好一个才可判定，否则算 `split`。
+
+`harvest` 会重判**所有**条目而不只是未结算的，因为半年后手工重分类同样是一次修正，也应该被学到。反过来，如果一条已结算的记录在账本里找不到了，`harvest` 不会悄悄把它当成待定、也不会抹掉决策（你可能只是 `--ledger` 指错了文件），而是单独报一行「N 条已结算的记录在账本里找不到了」。
+
+`learning/report.py` 给两个互相拉扯的数字：**覆盖率**（敢提议的比例）和**命中率**（提议被保留的比例）。
+
+报告里最要紧的一条区分，也是 free style 测试逼出来的：**「系统提议了账户、你留下或改掉」和「系统弃权、你自己填了一个」是两回事**。前者是一次有答案的预测，后者是一份白送的标注。第一版把两者混在一起，于是里程碑 1（永远弃权）报出了「覆盖率 85%、`Expenses:Unknown` 提议 11 修正 11」——听上去像一个次次都猜错的分类器，其实它一次都没猜过。现在这两类分开计，里程碑 1 老老实实报「覆盖率 0%（还没有提议过账户），已积累可学习样本 N 条」。
+
+真实的三轮实测（`auto_accept_above = 0.3`）：
+
+| 轮次 | 提议 | 保留 | 被改 | 你自己填 | 覆盖率 | 命中率 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 9 月 | 0 | 0 | 0 | 2 | 0% | — |
+| 10 月 | 0 | 0 | 0 | 4 | 0% | — |
+| 11 月 | 3 | 2 | 1 | 4 | 33% | 67% |
+
+前两轮证据不够，系统一次都不敢开口；第三轮越过阈值才开始提议。这正是它该有的样子。
 
 ---
 
-## 6. 逐阶段阅读
+## 7. 一笔交易的完整闭环
 
-### 6.1 入口：文件夹就是批次
+以 `examples/prototype/statements/` 里的瑞幸咖啡 32 元为例。
 
-**文件：** `batch_cli.py`、`batch_importer.py`、`examples/prototype/import_config.py`
+1. **两份账单，两行记录。** 支付宝那行写着「瑞幸咖啡 / 生椰拿铁 / 餐饮美食 / -32.00 / 08:00」，中行借记卡那行写着「消费 / 支付宝-快捷支付 / -32.00 / 120102」。
+2. **`normalize`** 在 2 天窗口里找到唯一的 1-1 匹配，合成一条 `AccountingEvent`：日期取银行侧 `2026-09-02`，对手和说明取钱包侧，`unresolved_role = "expense_account"`，已知 posting 是 `Assets:Bank:BOC:Debit -32.00`。
+3. **`situation_of`** 得到：星期二、08:00、早晨、工作日、金额 32、对手瑞幸咖啡、分词 {瑞幸, 幸咖, 咖啡}、渠道 (alipay, boc_debit)。
+4. **`HistoryAdvisor`** 第一次跑时日志是空的，返回空候选。
+5. **`UnknownClassifier`** 返回 `Expenses:Unknown`，`status = unknown`。
+6. **`render_event`** 产出交易，不带 `candidates`（因为没有），也不打标签。
+7. **`JsonlJournal`** 记下一条 `JournalEntry`，`decision = null`。
+8. **人在 Fava 里**把 `Expenses:Unknown` 改成 `Expenses:Food:Quick` 并保存。`event_id` 原样留在账本里。
+9. **`bean-import-learn`** 读账本，按 `event_id` 找到这条，`judge` 判定 `corrected`，写回日志。这一步之后，原始 CSV 可以删掉了。
+10. **下一次**买咖啡时，`HistoryAdvisor` 算出相似度 0.9 上下，衰减后得分约 0.85，置信度约 0.36，于是新交易带上 `candidates: "Expenses:Food:Quick 0.36"` 和一句人话证据。账户仍然是 unknown，决定权仍然在人手上。
+11. 如果账本里写了 `[advice].auto_accept_above = 0.3`，等证据攒够（实测第三个月越过阈值），第 10 步会直接填上账户，`model_id` 记为 `history`，并把「凭什么这么判」写进 `classification_reason`。
 
-设计约束是 Fava 只按单个文件调 importer，没法直接「导入一个目录」。旧版为此维护了一个 `*.batch.json` 清单，每次加账单都要改它。现在换成：**被 Fava 识别的那个文件是客户的 `ledger.toml` 自己**，它的 `[batch].folder` 指向账单目录。
+第 9 步是整套设计的支点：**学习信号不在账单里，也不在账本里，而在「提议」和「决定」的差值里**，而这个差值只有在 review 的那一刻存在。日志的唯一作用就是把它保存下来。
 
-- `PlatformBatchImporter.identify` 只比较路径是否等于构造时传入的配置路径。
-- `extract` 调 `statements_in(config.batch_folder)`，导入整个目录。
-- `scan_folder` 把目录切成「能识别的账单」和「跳过的文件」。`.pdf`、`.eml`、`.zip`、`.toml`、`.bean`、`.md`、`.json` 直接跳过，其余文件按内容判断，`detect_kind` 认不出就跳过。CLI 会把跳过的文件名打印出来。
-- 超过 8 MB 的文件不是跳过而是报错，避免「悄悄漏掉一份大账单」。
+---
 
-CLI 的 `collect_statements` 允许三种输入：不给参数（用配置的文件夹）、给文件夹、给具体文件。
+## 8. 实测：哪些假设站住了，哪些没有
 
-**review 时问什么**
+上面那条闭环是设计。下面是真的在 Fava 里跑了三个月（9/10/11 三轮下载 + 审核 + 回收）之后的结果。**单元测试一个都没红，五个问题全是在 Fava 里手动点出来的**，这本身值得记一笔。
 
-- 跳过 vs 失败的界线画得对吗？现在「CSV 存在但表头坏了」会被安静跳过，只在 CLI 输出里提示，Fava 里看不到。这是我最不确定的取舍。
-- 用 `ledger.toml` 当 Fava 的导入入口，是聪明还是别扭？替代方案是一个空的标记文件。
-- 目录扫描不递归。下载目录里如果自动分了子目录（按月份），现在读不到。
+### 站住了的
 
-### 6.2 身份识别：这份账单是谁的
-
-**文件：** `sources/identity.py`
-
-这是「多个微信号」问题的答案。账单文件头里本来就有身份信息，实测格式：
-
-| 来源 | 文件头字段 | 例子 |
-| --- | --- | --- |
-| 微信 | `微信昵称：[...]` | `微信昵称：[小明]` |
-| 支付宝 | `姓名：`、`支付宝账户：` | `支付宝账户：157**********` |
-| 中行借记 | `客户姓名：`、完整卡号 | 19 位卡号 |
-| 中行信用 | 只有每行的「卡号后四位」 | 靠 `[[cards]]` 分账户 |
-
-`statement_identities` 只扫描前 4000 个字符，避免把交易行里的内容当成身份。`resolve_source` 的匹配是分档的：
-
-| 档位 | 规则 | 为什么需要 |
-| --- | --- | --- |
-| 3 | 归一化后完全相同 | 最可信 |
-| 2 | 两边都有 ≥8 位数字且后四位相同 | 卡号写法不同（带空格、带掩码） |
-| 1 | 互为子串 | 文件头有多余字符 |
-
-只取最高档的匹配结果。分档是必须的：只用子串的话，`小明` 会同时匹配到 `小明工作号`，两个账号就分不开。最高档里有多个命中，或者一个都没有，都直接报错，不猜。
-
-只有当某个来源只配置了一个实例、并且（文件头没身份 或 配置没写 identity）时，才允许无条件归属。也就是说：**你写了 identity 并且账单里也有身份，那它们就必须对得上**，别人的账单混进文件夹会被挡住。
-
-**review 时问什么**
-
-- 第 1 档（互为子串）要不要留？它能容错，但也是唯一可能误判的一档。
-- 支付宝的 `支付宝账户：157**********` 掩码在尾部，所以「后四位匹配」对它无效，用户只能照抄文件头的原文。这个体验能接受吗？
-- 中行的表格一旦被另存为 CSV，文件头的 `客户姓名` 和卡号可能丢失。现在的兜底是「只有一个实例就用它」。如果你有两张借记卡，就必须保住文件头，否则报错。
-
-### 6.3 配置：一个平台账号一条
-
-**文件：** `customer_config.py`（344 行，其中大半是校验）
-
-```toml
-[batch]
-folder = "statements"
-
-[[sources]]
-type = "wechat"
-account = "Assets:WeChat:Balance"
-identity = "小明"              # 只有一个 wechat 实例时可省略
-lingqiantong = "Assets:WeChat:LingQianTong"   # 可选子账户
-
-[[cards]]
-number = "6217000000001234"    # 写完整卡号
-account = "Assets:Bank:BOC:Debit"
-
-[unknown]
-expense = "Expenses:Unknown"
-income = "Income:Unknown"
-
-[roles]
-expense = [...]                # 允许选择的费用账户
-income = [...]
-
-[semantic]                     # 里程碑 2，整张表删掉就退回里程碑 1
-endpoint = "http://127.0.0.1:11434/v1"
-model = "qwen3:8b"
-skill = "skills/food.md"
-```
-
-`[[sources]]` 和 `[cards]` 分开，是因为它们的键空间和职责不同：
-
-- `[[sources]]` 的键是「平台账号」。一份账单整体属于一个实例，解析器一开始就要知道是哪个。
-- `[[cards]]` 的键是「银行卡」。它是**唯一会出现在别人账单文本里**的标识：微信账单写 `中国银行(1234)`，信用卡账单有「卡号后四位」列。它是跨来源拼接的连接键，必须能被任意来源查询。
-- 一份信用卡账单里还可以有主卡和副卡两张卡，和「一份账单一个账户」的假设也对不上。
-
-卡号写全、按后四位匹配。加载时如果两张卡后四位相同，直接抛 `CustomerConfigError`——账单里只有后四位，这种歧义没有任何办法在导入时解决，只能在配置时拒绝。
-
-其他校验（都在 `load_customer_config` 及其私有函数里）：同类型多实例必须都写 identity 且互不相同；`[[sources]]` 里出现未知键会报错并列出该类型支持的子账户；`[semantic].skill` 必须是配置文件同目录下的相对 `.md` 路径，越界报错；`max_memories` 限 1–20。
-
-**review 时问什么**
-
-- 子账户（`lingqiantong`、`yuebao`、`huabei`）写成 `[[sources]]` 的平铺键，比原来的全局 `accounts.alipay_yuebao` 好在哪、差在哪？
-- `[roles]` 和 `[unknown]` 要不要合并？现在 unknown 账户会被自动追加进 roles 列表。
-- 配置文件没有版本号。以后改结构怎么迁移？
-
-### 6.4 适配器：只回答「这份账单里有哪些行」
-
-**文件：** `sources/{__init__,common,wechat,alipay,boc}.py`
-
-`detect_kind` 按内容识别，不看文件名。四个解析器各自处理列布局，输出 `SourceRecord`。列布局参考开源项目 china_bean_importers（MIT）的公开文档，没有复制它的代码，也没有复用它的分类引擎。
-
-符号规则是这层最容易出错的地方：
-
-| 来源 | 规则 |
+| 假设 | 怎么验的 |
 | --- | --- |
-| 微信 | 支出为负，收入为正；`零钱提现` 强制为负；中性交易按类型推断 |
-| 支付宝 | 支出为负，收入为正；「不计收支」按退款/余额宝收益/转入转出逐条判断，判断不了就报错 |
-| 中行借记 | 金额列本身带符号，直接用 |
-| 中行信用 | 「支出」列为负，「存入」列为正，两列必须只有一个有值 |
+| 原始账单可以删 | 把 `statements/` 整个改名，回收照样跑通——连接点是账本里的 `event_id`，不是文件 |
+| 几个月后手工重分类也能学到 | 直接改账本里一笔早已结算的交易，下次 `bean-import-learn` 重新判成 `corrected` |
+| 拆分不会被当成单标签样本 | 把一笔 268 元拆成两个账户，判成 `split`，记录但不学 |
+| 相似度能跨商户泛化 | 只教过「兰州拉面」，「老王牛肉面」就拿到了候选（二元组分词 + 同平台分类 + 金额相近） |
+| 阈值确实压得住早期的冲动 | `auto_accept_above = 0.3` 下，前两轮一次都没提议，第三轮才开口 |
 
-其他固定行为：微信的 `提现失败，已退回零钱` 和 `对方已退还` 直接跳过；支付宝网页版导出直接拒绝（它没有付款账户信息）；`.pdf` 和 `.eml` 容器明确拒绝并给出「另存为 CSV」的提示，不做猜测解析；单文件内 `source_id` 重复会报错。
+### 没站住的（都已修）
 
-**review 时问什么**
-
-- 「不计收支」的判断（`alipay.py` 的 `_neutral_direction`）是白名单式的，遇到没见过的类型直接失败。你更想要失败还是想要一个保守默认值？
-- 中行 PDF/EML 完全没做。这是我刻意推迟的：没有真实样本，`pymupdf` 的表格抽取没验证过。什么时候该做？
-- `card_tail` 的正则只认全角/半角括号里的 4 位数字。真实账单里还有别的写法吗？
-
-### 6.5 归一化：什么时候可以说「这是同一笔」
-
-**文件：** `normalize.py`
-
-三种结构性配对，都必须是一对一：
-
-1. **钱包卡支付 ↔ 银行清算。** 微信/支付宝那一行的支付方式是银行卡（有尾号、没有对手账户），银行那一行金额完全相等、币种相同、日期在窗口内，且（渠道关键词命中 或 卡号尾号相同）。带「还款」的行排除在外。
-2. **借记卡流出 ↔ 信用卡存入，文本含「还款」。** 生成 repayment，两侧账户都已知，不进分类器。
-3. **微信提现/充值。** 这行本身已经写明对方卡号，所以 counter_account 已知；如果银行流水里正好有唯一一条相反金额的记录，就把它并进来当证据，不再单独成一笔。
-
-唯一性由 `_consume_pairs` 保证：先枚举所有满足条件的配对，再统计每条记录出现在几个配对里，只有两边都只出现一次才合并。否则两条记录各自单独成事件，并互相写进 `link_candidates`，打上 `ambiguous-link` 标签交给人判断。
-
-合并后的事件：日期和金额取**清算方**（银行），商户、摘要、平台分类取**叙述完整方**（钱包）。同一笔钱只保留一个金额，禁止相加。`occurred_at` 取带钟点的那个，所以瑞幸那笔的交易日期是银行的 09-02，但情境时间仍是支付宝的 09-01 08:00。
-
-事件类型和待填角色由 `_kind_for` 决定：金额为 0 报错；文本含「退款」是 refund；负数是 expense + `expense_account`；正数是 income + `income_account`。**这就是「按总体正负值给出 expense unknown / income unknown」的实现位置。**
-
-**review 时问什么**
-
-- 日期窗口默认 2 天，配置项是 `date_window_days`。对信用卡「交易日 vs 银行记账日」够用吗？
-- 「金额精确相等」不容忍任何误差。跨币种、有手续费的提现怎么办？（现在微信提现的服务费在备注里，没有处理。）
-- `_event_id` 的输入是排序后的 evidence id 加上字符串 `normalizer-v1`。配对策略改变时要不要动这个版本号？动了会导致历史 event_id 全变。
-- 含糊配对现在是「分开 + 打标」，不是失败整批。0.1 的 demo 是失败整批。这个改变你认同吗？
-
-### 6.6 分类接口与里程碑 1 的实现
-
-**文件：** `classify.py`、`pipeline.py`
-
-`pipeline.import_files` 是组装点：读文件 → 归一化 → 对每条事件判断有没有 `unresolved_role` → 有就问分类器 → 渲染。
-
-`_request` 构造请求时做了一件重要的事：`allowed_accounts` 先取配置里的角色列表，再和 `existing` 账本里**已经 open 的账户**求交集；交集为空才退回配置列表。所以模型不可能选出一个账本里不存在的账户。
-
-`build_classifier` 决定用哪个实现：没有 `[semantic]` 就是 `UnknownClassifier`，有就构造模型分类器，并且此时才 import `bean_import.semantic`。
-
-**review 时问什么**
-
-- `unknown_account` 如果不在 `allowed_accounts` 里，现在会退化成 `allowed[0]`。这是静默行为，要不要改成报错？
-- `existing` 账本是 Fava 传进来的。命令行路径没有 existing，所以 allowlist 只来自配置。这个差异要不要消除？
-
-### 6.7 语义层：skill + 情境 + 记忆
-
-**文件：** `semantic/knowledge.py`、`semantic/llm.py`、`examples/prototype/skills/food.md`
-
-这一层的设计前提是：**现实中的分类不是「商户名 → 账户」的查表**。同一家店，工作日中午叫到公司，和周末晚上坐下来吃，不是一类。所以知识库不写对照表，写三样东西：
-
-1. **skill**：客户自己写的 Markdown 生活说明。餐饮的例子按外卖、简餐、买菜、餐厅大餐划分，描述的是时间和场景，不是品牌。
-2. **情境**（`describe_situation`）：程序从这一笔抽出来的一句话。日期、星期、钟点、时段（早晨/中午/下午/晚上/深夜）、金额、对手、摘要、平台分类、渠道。
-3. **记忆**（`memory_from_ledger`）：账本里已有交易按账户汇总——多少笔、金额大概在什么范围、出现在星期几、记得哪几个名字。提示词里明确说「记忆不是店名规则」。
-
-模型调用是一次 `POST /chat/completions`，temperature 0，要求返回 `{account, uncertain, reason}`。没有用 LangChain 或 LangGraph：这里没有循环、没有工具调用、没有图中暂停等人——等人这件事已经由 Fava Import 承担了。transport 可注入，所以测试永远不碰网络。
-
-失败路径全部收敛到同一个地方：调用失败、响应不是 JSON（重试一次后仍失败）、`uncertain: true`、账户不在允许列表——都调用 `classify.unknown()`，结果和里程碑 1 完全一样，只是 `reason` 不同。**模型永远不会让导入失败，也永远不会写出一个账本里没有的账户。**
-
-Ollama 就是这个 API：`endpoint = "http://127.0.0.1:11434/v1"`，本地不需要 API key。
-
-**review 时问什么**
-
-- 记忆现在是「按账户汇总」，不是「按相似交易检索」。对一个有几千笔交易的账本，这个摘要够不够？
-- 情境里放了 payee。这和「不要按店名分类」的主张矛盾吗？我的判断是：payee 应该作为线索给模型，只是不能作为规则由程序硬编码。
-- prompt 没有版本号，也没有缓存。研究方向文档里提过缓存，原型里没做。
-- 一笔一次请求。几百笔的月度账单会调用几百次本地模型，速度可能不可接受。
-
-### 6.8 渲染：最后一步不做任何判断
-
-**文件：** `render.py`
-
-```28:39:src/bean_import/render.py
-    if event.unresolved_role is not None:
-        if classification is None:
-            raise RenderError(f"{event.event_id} still needs an account")
-        total = sum((amount for _, amount in amounts), start=Decimal("0"))
-        amounts.append((classification.account, -total))
-        label = UNKNOWN if classification.status == UNKNOWN else classification.model_id
-        reason = classification.reason
-        model_id = classification.model_id
-
-    balance = sum((amount for _, amount in amounts), start=Decimal("0"))
-    if balance != 0:
-        raise RenderError(f"{event.event_id} does not balance")
-```
-
-最多补一条 posting，金额是已知金额之和的相反数，然后强制校验合计为零。写入的 metadata：
-
-| 键 | 内容 |
-| --- | --- |
-| `event_id` | 事件指纹 |
-| `event_kind` | expense / income / transfer / refund / repayment |
-| `source_id` | 全部证据 id，逗号分隔 |
-| `filename` / `lineno` | 第一条证据的位置，Fava 用它显示原始行 |
-| `source_category` | 平台分类原文 |
-| `classification` | `structural` / `unknown` / 模型 id |
-| `classification_reason` | 为什么是 unknown |
-| `link_candidates` | 配对含糊时的候选 |
-
-**review 时问什么**
-
-- 只有第一条证据的 `filename`/`lineno` 进了 metadata，第二条只留在 `source_id` 里。要不要都留？
-- `classification` 这个键既可能是状态（`structural`/`unknown`）又可能是模型名。要不要拆成两个键？
-
----
-
-## 7. 跟着一笔交易走一遍
-
-以「瑞幸咖啡 32 元」为例，它在两份账单里各出现一次。
-
-**支付宝 `statements/alipay.csv`**
-
-```
-支付宝账户：157**********
-...
-2026-09-01 08:00:00,餐饮美食,瑞幸咖啡,,生椰拿铁,支出,32.00,中国银行储蓄卡(1234),交易成功,A1,B1,
-```
-
-**中行借记卡 `statements/boc_debit.csv`**
-
-```
-2026-09-02,120102,人民币,-32.00,...,消费,网上支付,------,支付宝-快捷支付,...
-```
-
-1. `scan_folder` 在 `statements/` 里找到 4 份 CSV。
-2. `detect_kind` 分别判成 `alipay` 和 `boc_debit`。
-3. `resolve_source`：支付宝文件头里有 `157**********` 和 `小明`；配置里只有一个 alipay 实例且没写 identity，归属成立。
-4. `parse_alipay` 看到支付方式 `中国银行储蓄卡(1234)` 带卡尾号，于是这一行的资金账户**不是**支付宝余额，而是 `[[cards]]` 里 1234 对应的 `Assets:Bank:BOC:Debit`，`card_tail="1234"`，金额 `-32.00`，`occurred_at="2026-09-01 08:00:00"`。
-5. `parse_boc_debit` 得到金额 `-32.00`，附言 `支付宝-快捷支付`，`occurred_at="2026-09-02 120102"`。
-6. `normalize` 的 `_card_payment_pair`：币种相同、金额相等、日期差 1 天（窗口 2 天）、附言含渠道关键词「支付宝」。只有这一对满足，所以唯一，合并。
-7. `_card_payment_event`：日期取银行的 09-02，posting 取银行账户 -32.00，payee/摘要/分类取支付宝的「瑞幸咖啡 / 生椰拿铁 / 餐饮美食」。`_occurred_at` 优先带冒号的时间戳，所以保留支付宝的 `2026-09-01 08:00:00`。
-8. `_kind_for(-32.00)` → `expense` + `expense_account`。
-9. 里程碑 1：`UnknownClassifier` 返回 `Expenses:Unknown`。里程碑 2：情境会是「2026-09-01 星期二 08:00，早晨，金额 -32.00 CNY。对手：瑞幸咖啡……」，模型据此在四个餐饮账户里选。
-10. `render_event` 补上 `Expenses:Unknown +32.00`，校验合计为零，写 metadata，`source_id` 里同时有 `boc_debit:...` 和 `alipay:A1`。
-
-想看它怎么坏掉：在借记卡 CSV 里再加一行同金额同日期的支付宝快捷支付。这时配对不唯一，两条记录各自成事件，都带 `link_candidates`，`test_ambiguous_card_match_stays_unmerged` 锁的就是这个行为。
-
----
-
-## 8. 测试地图
-
-`tests/test_platform_pipeline.py`，12 个测试，每个锁一条设计决定：
-
-| 测试 | 锁住什么 |
-| --- | --- |
-| `test_milestone_one_imports_without_any_model` | 没有模型也能完整导入；三笔进 unknown，两笔 structural；输出能被 Beancount 加载且无错误 |
-| `test_ambiguous_card_match_stays_unmerged` | 配对含糊时分开保留并打标，不猜 |
-| `test_alipay_gbk_and_rejected_containers` | GBK 编码；PDF 和支付宝网页版明确拒绝 |
-| `test_income_direction_falls_back_to_the_income_unknown_account` | 正数走 `Income:Unknown` |
-| `test_two_wechat_accounts_are_told_apart_by_the_statement_header` | 两个微信号按昵称分开；陌生昵称报错 |
-| `test_cards_are_written_in_full_and_matched_by_tail` | 完整卡号、按尾号查找、尾号冲突报错 |
-| `test_skill_context_uses_time_and_ledger_memory` | prompt 里确实含星期二、早晨、skill 原文、账本记忆 |
-| `test_skill_path_must_stay_beside_the_ledger` | skill 路径越界报错 |
-| `test_model_choice_is_limited_to_allowed_accounts` | 模型选了列表外的账户 → unknown |
-| `test_invalid_model_json_is_retried_once` | 非 JSON 响应重试一次 |
-| `test_unknown_classifier_keeps_the_direction_and_refuses_to_guess` | 里程碑 1 的语义 |
-| `test_folder_is_the_batch_and_other_files_are_skipped` | 只有配置文件被识别；PDF 和笔记被跳过；空目录报错 |
-
-其余 15 个测试属于 0.1 的 CSV 样例，本次没有改动它们的行为。
-
----
-
-## 9. 我知道的弱点
-
-按我自己的担心程度排序，这些是最值得你挑战的：
-
-1. **一笔一次模型调用**，没有缓存也没有批处理。真实月账单会很慢。
-2. **PDF/EML 没做**，而中行的真实账单就是 PDF。现在要求用户自己另存为 CSV，这个前提在真实使用里可能站不住。
-3. **坏掉的 CSV 会被安静跳过**（`detect_kind` 认不出就跳过），只在 CLI 输出里提示，Fava 里看不到。
-4. **身份匹配的第 1 档（互为子串）** 是唯一可能误判的规则。
-5. **真实样本一次都没跑过**。所有账单都是我按公开格式文档合成的，列顺序、编码、特殊行都可能和你的真实导出不同。
-6. **没有跨批次的去重**，靠的是 Fava 自己的 duplicate 检测（实测有效），不是我们自己的 `source_id` 索引。
-7. **金额必须精确相等**才配对，有手续费的场景（微信提现服务费）没有处理。
-
----
-
-## 10. Review 清单
-
-可以照着这个顺序过一遍：
-
-- [ ] 跑 `uv run pytest`，再跑一次 CLI，确认输出和第 2.2 节的表一致
-- [ ] 打开 Fava，确认导入页只有一个条目，并走一次提取
-- [ ] `rg "bean_import.semantic" src/` 确认只有 `pipeline.py` 命中，验证分层
-- [ ] 读 `models.py`（57 行），确认两个契约的字段你都认可
-- [ ] 读 `classify.py`（90 行），这是接口的全部
-- [ ] 读 `normalize.py` 的 `_consume_pairs` 和三个 `_*_pair`，这是「同一笔」的全部判据
-- [ ] 读 `identity.py` 的 `match_rank`，判断分档规则是否可靠
-- [ ] 读 `customer_config.py` 的校验分支，找出你觉得该失败却没失败的地方
-- [ ] 打开 `skills/food.md`，判断这种写法你愿不愿意长期维护
-- [ ] 对照第 9 节，决定哪几条要在下一轮先解决
-
----
-
-## 11. 文件索引
-
-| 文件 | 行数 | 职责 |
+| 问题 | 实测现象 | 修法 |
 | --- | --- | --- |
-| `src/bean_import/models.py` | 57 | 两个数据契约 |
-| `src/bean_import/customer_config.py` | 344 | TOML 加载与全部校验 |
-| `src/bean_import/sources/common.py` | 149 | 编码、CSV、日期、金额、指纹 |
-| `src/bean_import/sources/identity.py` | 128 | 文件头身份抽取与实例解析 |
-| `src/bean_import/sources/wechat.py` | 182 | 微信适配器 |
-| `src/bean_import/sources/alipay.py` | 211 | 支付宝适配器 |
-| `src/bean_import/sources/boc.py` | 218 | 中行借记卡与信用卡适配器 |
-| `src/bean_import/sources/__init__.py` | 58 | 类型识别与分发 |
-| `src/bean_import/normalize.py` | 310 | 跨来源配对与事件生成 |
-| `src/bean_import/classify.py` | 90 | 分类接口与里程碑 1 实现 |
-| `src/bean_import/semantic/knowledge.py` | 152 | 情境抽取与账本记忆 |
-| `src/bean_import/semantic/llm.py` | 204 | OpenAI 兼容调用与校验 |
-| `src/bean_import/render.py` | 72 | 事件 → Beancount 交易 |
-| `src/bean_import/pipeline.py` | 102 | 组装点 |
-| `src/bean_import/batch_importer.py` | 142 | Fava 入口与目录扫描 |
-| `src/bean_import/batch_cli.py` | 71 | 命令行入口 |
+| **判重在第一次审核之后就失效** | 8 笔已入账的交易里只有 1 笔被标成 duplicate，恰好就是唯一一笔我没改过账户的 | `app/fava.py::mark_known_events`，按 `event_id` 精确判重 |
+| **`#needs-review` 标签会变味** | BQL 查出 12 笔带标签，其中只有 1 笔真的还没处理 | 删掉标签，改用 `Expenses:Unknown` 筛 |
+| **候选证据被永久写进账本** | 一碗牛肉面下面挂着一整段中文证据，而它只对那一次审核有用 | `[advice].metadata`，默认 `short` |
+| **报告把弃权算成预测** | 里程碑 1 报「覆盖率 85%、`Expenses:Unknown` 提议 11 修正 11」 | 提议和标注分开计，见 §6 阶段 10 |
+| **重新导入会给自己刷分** | 命中率一度显示 80%，而系统实际上一次都没提议过 | `merge()` 冻结已结算的记录 |
 
-相关文档：[研究方向](research-direction.md)（设计依据与里程碑定义）、[code-reading-guide.md](code-reading-guide.md)（0.1 的 CSV 样例）、[architecture.md](architecture.md)（0.1 预研架构）。
+最后一条最值得看：它是前面几条修完之后才浮出来的，**而且方向是系统性地高估自己**。如果只看单元测试和报告数字，这个 bug 可以活很久。
+
+---
+
+## 9. 测试地图
+
+119 个测试，目录结构和 `src/` 一一对应。
+
+| 文件 | 守住什么 |
+| --- | --- |
+| `tests/test_architecture.py` | 依赖方向、core 零依赖、模型只被惰性导入 |
+| `tests/core/test_situation.py` | 时间、时段、分词、金额符号 |
+| `tests/core/test_render.py` | 候选 metadata、三档详细程度、不打标签、不平衡就报错 |
+| `tests/core/test_classifiers.py` | 不用模型时的行为、分类器链的短路 |
+| `tests/core/test_judge.py` | 四种人工结果的判定 |
+| `tests/config/test_customer.py` | 卡号尾号冲突、多账号必须有身份、skill 越界、参数边界 |
+| `tests/sources/test_statements.py` | GBK、容器文件拒绝、两个微信号分辨、身份分档 |
+| `tests/journal/test_journal.py` | 编解码往返、幂等、不抹掉决策、坏行定位、三种适配器等价 |
+| `tests/advice/test_similarity.py` | 相似度、金额按比值衰减、时间半衰期 |
+| `tests/advice/test_history.py` | 排序、修正优先于接受、弃权不学、旧习惯让位、收入不串到支出 |
+| `tests/advice/test_history_classifier.py` | 阈值、白名单、证据不足就不填 |
+| `tests/learning/test_harvest.py` | 待定、修正、半年后改判、账本里消失的记录、重复回收幂等 |
+| `tests/learning/test_report.py` | 提议与标注分开计、里程碑 1 报 0 覆盖、混淆表 |
+| `tests/semantic/test_llm.py` | 提示词内容、越界账户、坏 JSON 重试一次、断网退化、检索记忆优先 |
+| `tests/app/test_fava.py` | 改过账户之后仍然判重、拆分之后仍然判重、没有 `event_id` 不乱认 |
+| `tests/app/test_pipeline.py` | 里程碑 1 端到端、模糊匹配不合并、收入方向、mock 替换 |
+| `tests/app/test_learning_loop.py` | **完整闭环**：提议 → 修正 → 回收 → 下次有候选 → 够强时自动填 |
+| `tests/csv_demo/*` | 0.1 样例，未改动 |
+
+没有任何测试会调真实模型；`semantic` 全部通过注入的 transport 测。
+
+---
+
+## 10. 我知道的弱点
+
+1. **相似度权重和半衰期是拍的。** 应该由命中率驱动调参，但样本太少时调参就是过拟合，所以现在只暴露成配置。
+2. **中文分词用二元组**，`兰州拉面` 和 `兰州牛肉面` 重合度偏高，`面` 类商户之间会互相污染。
+3. **`split` 完全不学。** 拆分账单其实包含很强的信息（「这家店我会拆成两类」），现在只是记录。
+4. **候选只按账户聚合**，没有「这个场景下你通常怎么拆」的概念。
+5. **信用卡多账号靠 `[[cards]]`**，因为中行信用卡账单头里没有持卡人身份。
+6. **`bean-import-learn` 需要手动跑。** Fava 有 `after_insert_entry` 扩展钩子（已验证会触发），可以做到保存即回收，但那会把 Fava 变成必需品；目前保持工具无关。
+7. **日志会一直变长。** 没有归档和压缩策略，几年后需要处理。
+8. **`accepted` 权重是猜的 0.4。** 这个数字直接决定系统有多容易自我确认，值得用真实数据验证。
+
+---
+
+## 11. Review 检查清单
+
+- [ ] `tests/test_architecture.py` 里的 `ALLOWED` 表，和你认为合理的分层一致吗？
+- [ ] `core/ports.py` 的五个协议，粒度是不是太粗或太细？
+- [ ] `Situation` 该不该包含出资账户？现在只用 `source_types` 近似。
+- [ ] `judge` 的「恰好一个对方账户」规则，在你的真实账本里会不会经常判成 `split`？
+- [ ] `corrected` 1.0 / `accepted` 0.4 这个比例，你接受吗？
+- [ ] 置信度的饱和函数（`总分 / (总分 + 1.5)`）会不会让数字长期偏低到没人看？
+- [ ] `[advice].metadata` 默认 `short`，只在账本里留一行 `candidates`。这一行你愿意永久留着吗？不愿意就设成 `none`。
+- [ ] 默认开启日志（`decisions.jsonl` 放在账本旁边）是否可以接受？
+- [ ] `auto_accept_above` 默认 0（永不自动填）是对的吗？
+
+---
+
+## 12. 文件索引
+
+| 路径 | 行数量级 | 作用 |
+| --- | --- | --- |
+| `core/models.py` | 60 | `SourceRecord` / `AccountingEvent` |
+| `core/classification.py` | 95 | 请求、结论、`accept` / `unknown` |
+| `core/situation.py` | 150 | 特征抽取，含中文分词 |
+| `core/advice.py` | 70 | `Candidate` / `Advice` |
+| `core/journal.py` | 150 | 日志条目、`merge`、`judge` |
+| `core/ports.py` | 75 | **全部五个协议** |
+| `core/classifiers.py` | 55 | `UnknownClassifier` / `FirstResolved` |
+| `core/normalize.py` | 310 | 跨来源配对 |
+| `core/render.py` | 90 | 事件 → Transaction，含审核 metadata |
+| `config/customer.py` | 470 | TOML 加载与校验 |
+| `sources/*` | 500 | 四种账单的解析与身份识别 |
+| `journal/codec.py` | 210 | JSON 编解码 |
+| `journal/jsonl.py` | 80 | 追加写、去重读、原子重写 |
+| `journal/memory.py` | 50 | `NullJournal` / `InMemoryJournal` |
+| `advice/similarity.py` | 130 | 相似度与衰减 |
+| `advice/history.py` | 185 | 检索与置信度 |
+| `advice/classifier.py` | 45 | 阈值自动填 |
+| `learning/ledger.py` | 70 | 按 `event_id` 索引账本 |
+| `learning/harvest.py` | 65 | 回收 |
+| `learning/report.py` | 175 | 覆盖率 / 命中率 / 混淆 |
+| `semantic/knowledge.py` | 130 | skill + 情境 + 记忆 |
+| `semantic/llm.py` | 210 | OpenAI 兼容调用 |
+| `app/factory.py` | 140 | **组装的唯一入口** |
+| `app/pipeline.py` | 140 | 一次导入的固定顺序 |
+| `app/fava.py` | 145 | beangulp / Fava 入口 |
+| `app/cli/batch.py` | 70 | `bean-import-batch` |
+| `app/cli/learn.py` | 60 | `bean-import-learn` |

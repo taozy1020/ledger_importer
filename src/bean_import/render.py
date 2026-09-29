@@ -7,7 +7,7 @@ from decimal import Decimal
 from beancount.core.amount import Amount
 from beancount.core.data import Posting, Transaction
 
-from bean_import.classify import Classification
+from bean_import.classify import UNKNOWN, Classification
 from bean_import.models import AccountingEvent
 
 
@@ -30,11 +30,7 @@ def render_event(
             raise RenderError(f"{event.event_id} still needs an account")
         total = sum((amount for _, amount in amounts), start=Decimal("0"))
         amounts.append((classification.account, -total))
-        label = (
-            "suspense"
-            if classification.status == "suspense"
-            else classification.model_id
-        )
+        label = UNKNOWN if classification.status == UNKNOWN else classification.model_id
         reason = classification.reason
         model_id = classification.model_id
 

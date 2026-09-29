@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from bean_import.customer_config import CustomerConfig
+from bean_import.customer_config import CustomerConfig, SourceInstance
 from bean_import.models import SourceRecord
 from bean_import.sources.common import (
     SourceParseError,
@@ -49,10 +49,11 @@ def parse_boc_debit(
     text: str,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> list[SourceRecord]:
     rows = csv_rows(text)
     header_row, columns = find_header(rows, DEBIT_FIELDS)
-    account = config.require_account("boc_debit")
+    account = instance.account
     tail = config.tail_for_account(account)
     records: list[SourceRecord] = []
     for row_number, cells in rows:
@@ -79,6 +80,7 @@ def parse_boc_credit(
     text: str,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> list[SourceRecord]:
     rows = csv_rows(text)
     header_row, columns = find_header(rows, CREDIT_FIELDS)
@@ -86,7 +88,9 @@ def parse_boc_credit(
     for row_number, cells in rows:
         if row_number <= header_row or not any(cells):
             continue
-        records.append(_credit_row(cells, columns, row_number, source_file, config))
+        records.append(
+            _credit_row(cells, columns, row_number, source_file, config, instance)
+        )
     reject_duplicate_ids([record.source_id for record in records], "BOC credit")
     if not records:
         raise SourceParseError("BOC credit statement contains no transaction rows")
@@ -139,6 +143,7 @@ def _debit_row(
         funding_method=raw_fields["渠道"],
         card_tail=tail,
         source_file=source_file,
+        occurred_at=f"{raw_fields['记账日期']} {raw_fields['记账时间']}",
     )
 
 
@@ -148,6 +153,7 @@ def _credit_row(
     row_number: int,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> SourceRecord:
     currency = currency_code(cell(cells, columns, "货币", row_number), row_number)
     _expect_currency(currency, config.currency, row_number)
@@ -159,7 +165,7 @@ def _credit_row(
     expense = cell(cells, columns, "支出", row_number)
     amount = _credit_amount(deposit, expense, row_number)
     narration, payee = _split_description(description)
-    account = config.cards.get(tail) or config.require_account("boc_credit")
+    account = config.find_card_account(tail) or instance.account
     raw_fields = {
         "货币": currency,
         "交易日": cell(cells, columns, "交易日", row_number),
@@ -183,6 +189,7 @@ def _credit_row(
         currency=currency,
         card_tail=tail,
         source_file=source_file,
+        occurred_at=raw_fields["交易日"],
     )
 
 

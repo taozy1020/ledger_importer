@@ -77,19 +77,29 @@ bean-import-csv --help
 - [代码阅读指南](doc/code-reading-guide.md)：按文件、调用链和金额语义理解原型。
 - [公开文档索引](doc/README.md)：产品、架构、部署和使用说明。
 - [研究方向](doc/research-direction.md)：多来源归一化与 LLM 语义分类。
+- [平台账单原型审阅指引](doc/prototype-review-guide.md)：原型的设计说明与逐阶段代码导读。
 
 ## 平台账单原型
 
-微信、支付宝手机账单，以及中行借记卡/信用卡的表格适配器在 `examples/prototype/`。每个客户使用自己的 `ledger.toml`：资金账户、卡号尾号、允许分类的账户，以及 `[[knowledge.examples]]` 和 `[[knowledge.guides]]`。
+微信、支付宝手机账单，以及中行借记卡/信用卡的表格适配器在 `examples/prototype/`。每个客户使用自己的 `ledger.toml`。
 
-分类不使用 LangChain 或 LangGraph。流程是固定的：先做一对一合并，再检索这份知识库，最后可选地调用一次 OpenAI 兼容接口。模型只能返回允许列表里的账户。`endpoint` 为空时，只使用知识库中的商户示例；没有命中就记入 suspense 账户。PDF 和邮件容器会明确拒绝，当前读取的是这些账单的 CSV 表格。
+**账单放一个文件夹就行。** `[batch].folder` 指向下载目录，导入时读这个目录里所有能识别的账单，PDF、压缩包和其他文件会被跳过并列出来。配置平时不用改。
+
+**一个平台账号一条 `[[sources]]`。** 有两个微信号就写两条，`identity` 填账单文件头里的身份：微信的 `微信昵称`、支付宝的 `支付宝账户` 或 `姓名`、中行的卡号或 `客户姓名`。程序从文件头读出身份再决定这份账单属于哪个账户；匹配不上或同时匹配多个就整批失败，不会把两个钱包混成一个。同一来源只配置一个账号时可以不写 `identity`。
+
+**`[[cards]]` 写完整卡号。** 账单里只会出现后四位，所以匹配用后四位；两张卡后四位相同时配置直接报错，因为这种情况无法从账单里分辨。
+
+**里程碑 1（当前默认，不需要模型）。** 配对、方向、转账和信用卡还款全部由确定性代码判断。分类无法从账单本身确定时，按金额方向落到 `[unknown]` 配置的账户：支出进 `Expenses:Unknown`，收入进 `Income:Unknown`，交易照常平衡，在 Fava 里改账户。`examples/prototype/ledger.toml` 就是这一层的完整配置。
+
+**里程碑 2（可选）。** 语义分类在 `bean_import.classify.SemanticClassifier` 这一个接口后面，实现放在 `bean_import/semantic/`。生活分类说明写在 Markdown skill 里，例如 `examples/prototype/skills/food.md`：按外卖、简餐、买菜、餐厅大餐描述时间和生活场景，而不是按商户名做对照表。导入时抽出这笔交易的星期、钟点、金额和渠道，并从已有账本归纳每个账户的记忆，和 skill 一起送给本地模型。配置见 `examples/prototype/ledger-with-model.toml`：加一张 `[semantic]` 表，Ollama 的 OpenAI 兼容地址是 `http://127.0.0.1:11434/v1`，本地模型不需要 API key。删掉这张表就退回里程碑 1。
 
 ```sh
 uv run bean-import-batch \
   --config examples/prototype/ledger.toml \
-  --output /tmp/prototype.bean \
-  examples/prototype/statements/*.csv
+  --output /tmp/prototype.bean
 ```
+
+不带文件参数就导入 `[batch].folder`；也可以显式传文件或另一个文件夹。
 
 Fava 示例：
 
@@ -97,7 +107,7 @@ Fava 示例：
 uv run fava examples/prototype/main.bean
 ```
 
-导入页选择 `demo.batch.json` 的 `WeChat + Alipay + BOC batch`。它会把支付宝银行卡消费和中行借记卡清算合并成一笔，并把信用卡还款、微信提现识别为结构性交易，不送给分类器。
+导入页只有一个条目，就是 `ledger.toml` 本身，名字是 `Statement folder statements`。选它会导入整个文件夹：支付宝银行卡消费和中行借记卡清算合并成一笔，信用卡还款和微信提现识别为结构性交易，不送给分类器。
 
 ## 跑通最小例子
 

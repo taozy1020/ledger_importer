@@ -9,6 +9,7 @@ from bean_import.models import SourceRecord
 from bean_import.sources.alipay import parse_alipay
 from bean_import.sources.boc import parse_boc_credit, parse_boc_debit
 from bean_import.sources.common import SourceParseError, csv_rows, read_text
+from bean_import.sources.identity import resolve_source
 from bean_import.sources.wechat import parse_wechat
 
 
@@ -24,15 +25,16 @@ def read_platform_file(path: str | Path, config: CustomerConfig) -> list[SourceR
     text = read_text(file_path)
     kind = detect_kind(text)
     source = str(file_path)
+    if kind is None:
+        raise SourceParseError(f"Unrecognized statement format: {file_path.name}")
+    instance = resolve_source(config, kind, text, file_path.name)
     if kind == "wechat":
-        return parse_wechat(text, source, config)
+        return parse_wechat(text, source, config, instance)
     if kind == "alipay":
-        return parse_alipay(text, source, config)
+        return parse_alipay(text, source, config, instance)
     if kind == "boc_debit":
-        return parse_boc_debit(text, source, config)
-    if kind == "boc_credit":
-        return parse_boc_credit(text, source, config)
-    raise SourceParseError(f"Unrecognized statement format: {file_path.name}")
+        return parse_boc_debit(text, source, config, instance)
+    return parse_boc_credit(text, source, config, instance)
 
 
 def detect_kind(text: str) -> str | None:

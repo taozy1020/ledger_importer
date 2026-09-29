@@ -32,6 +32,7 @@ class SourceRecord:
     card_tail: str = ""
     counter_account: str = ""
     source_file: str = ""
+    occurred_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,3 +54,4 @@ class AccountingEvent:
     flags: tuple[str, ...]
     source_files: tuple[str, ...]
     row_numbers: tuple[int, ...]
+    occurred_at: str = ""

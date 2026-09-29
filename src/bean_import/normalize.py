@@ -262,7 +262,18 @@ def _event(
         flags=flags,
         source_files=tuple(record.source_file for record in records),
         row_numbers=tuple(record.row_number for record in records),
+        occurred_at=_occurred_at(records),
     )
+
+
+def _occurred_at(records: tuple[SourceRecord, ...]) -> str:
+    timed = [record.occurred_at for record in records if ":" in record.occurred_at]
+    if timed:
+        return max(timed, key=len)
+    for record in records:
+        if record.occurred_at:
+            return record.occurred_at
+    return ""
 
 
 def _kind_for(amount: Decimal, text: str) -> tuple[EventKind, AccountRole | None]:

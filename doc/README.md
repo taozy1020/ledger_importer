@@ -20,6 +20,7 @@
 
 - [部署指南](deployment-guide.md)：从源码开发切换到 wheel 发布与 uv tool 安装。
 - [研究方向](research-direction.md)：`dev` 分支的当前路线，多来源归一化与 LLM 语义分类。
+- [平台账单原型审阅指引](prototype-review-guide.md)：微信/支付宝/中行原型的设计、逐阶段代码导读、端到端追踪、测试地图与已知弱点。
 - [产品需求文档](PRD.md)：用户、问题、功能范围、MVP 验收与非目标。0.1 预研稿。
 - [软件架构方案](architecture.md)：模块接口、CSV 原型切片及演进阶段。0.1 预研稿。
 - [操作指南](usage-guide.md)：如何启动示例 Fava、审核并检查已写入的分录。

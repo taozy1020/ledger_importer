@@ -1,12 +1,15 @@
-"""Beangulp entry points for one statement or a multi-file batch manifest."""
+"""Beangulp entry points for one statement or for a whole download folder.
+
+Fava calls an importer with a single file path, so the batch entry point is the
+customer's ledger config: identifying it means "import every statement in the
+folder it points at". Nothing has to be edited when new statements arrive.
+"""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from datetime import date
-from pathlib import Path, PurePosixPath
-from typing import cast
+from pathlib import Path
 
 from beancount.core.data import Directive
 from beangulp.importer import Importer
@@ -16,9 +19,11 @@ from bean_import.pipeline import import_files
 from bean_import.sources import detect_kind, read_platform_file
 from bean_import.sources.common import MAX_STATEMENT_BYTES, SourceParseError, read_text
 
+SKIPPED_SUFFIXES = {".pdf", ".eml", ".zip", ".toml", ".bean", ".md", ".json"}
+
 
 class BatchError(ValueError):
-    """A batch manifest cannot be imported safely."""
+    """A statement folder cannot be imported safely."""
 
 
 class PlatformImporter(Importer):
@@ -33,7 +38,7 @@ class PlatformImporter(Importer):
 
     def identify(self, filepath: str) -> bool:
         path = Path(filepath)
-        if path.suffix.lower() in {".pdf", ".eml", ".json"}:
+        if path.suffix.lower() in SKIPPED_SUFFIXES:
             return False
         try:
             return detect_kind(read_text(path)) is not None
@@ -59,96 +64,79 @@ class PlatformImporter(Importer):
 
 
 class PlatformBatchImporter(Importer):
-    """Import a JSON manifest that lists several statements from one batch."""
+    """Import every statement in the folder the customer config points at."""
 
-    def __init__(self, config: CustomerConfig, root: Path) -> None:
+    def __init__(self, config: CustomerConfig, config_path: Path) -> None:
         self.config = config
-        self.root = root
+        self.config_path = Path(config_path).resolve()
 
     @property
     def name(self) -> str:
-        return "WeChat + Alipay + BOC batch"
+        return f"Statement folder {self.config.batch_folder.name}"
 
     def identify(self, filepath: str) -> bool:
-        path = Path(filepath)
-        if not path.name.endswith(".batch.json"):
-            return False
         try:
-            raw: object = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+            return Path(filepath).resolve() == self.config_path
+        except OSError:
             return False
-        if not isinstance(raw, dict):
-            return False
-        item = cast(dict[str, object], raw)
-        version = item.get("version")
-        files = item.get("files")
-        file_list = cast(list[object], files) if isinstance(files, list) else []
-        return (
-            isinstance(version, int)
-            and not isinstance(version, bool)
-            and version == 1
-            and len(file_list) > 0
-        )
 
     def account(self, filepath: str) -> str:
         del filepath
-        return self.config.require_account("boc_debit")
+        return self.config.sources[0].account
 
     def date(self, filepath: str) -> date:
+        del filepath
         records = [
             record
-            for path in load_batch_files(filepath, self.root)
+            for path in statements_in(self.config.batch_folder)
             for record in read_platform_file(path, self.config)
         ]
         if not records:
-            raise BatchError(f"{filepath} contains no transaction rows")
+            raise BatchError(f"{self.config.batch_folder} contains no transaction rows")
         return min(record.transaction_date for record in records)
 
     def filename(self, filepath: str) -> str:
-        return Path(filepath).name
+        del filepath
+        return f"{self.config.batch_folder.name}.csv"
 
     def extract(
         self,
         filepath: str,
         existing: Sequence[Directive],
     ) -> list[Directive]:
-        files = load_batch_files(filepath, self.root)
+        del filepath
+        files = statements_in(self.config.batch_folder)
         return list(import_files(files, self.config, existing))
 
 
-def load_batch_files(path: str | Path, root: Path) -> list[Path]:
-    """Resolve manifest paths and keep every statement inside ``root``."""
+def scan_folder(folder: str | Path) -> tuple[list[Path], list[Path]]:
+    """Split one folder into recognized statements and everything else."""
 
-    manifest = Path(path)
-    try:
-        raw: object = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise BatchError(f"Cannot read batch manifest {manifest}: {error}") from error
-    if not isinstance(raw, dict):
-        raise BatchError("Batch manifest must be a JSON object")
-    item = cast(dict[str, object], raw)
-    version = item.get("version")
-    if isinstance(version, bool) or version != 1:
-        raise BatchError("Batch manifest must have integer version=1")
-    files = item.get("files")
-    if not isinstance(files, list) or not files:
-        raise BatchError("Batch manifest field 'files' must be a non-empty list")
-    return [_resolve(root, manifest, value) for value in cast(list[object], files)]
+    directory = Path(folder)
+    if not directory.is_dir():
+        raise BatchError(f"Statement folder does not exist: {directory}")
+    statements: list[Path] = []
+    skipped: list[Path] = []
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.suffix.lower() in SKIPPED_SUFFIXES:
+            skipped.append(path)
+            continue
+        if path.stat().st_size > MAX_STATEMENT_BYTES:
+            raise BatchError(f"Statement is too large: {path.name}")
+        try:
+            recognized = detect_kind(read_text(path)) is not None
+        except (OSError, UnicodeError, SourceParseError):
+            recognized = False
+        (statements if recognized else skipped).append(path)
+    return statements, skipped
 
 
-def _resolve(root: Path, manifest: Path, value: object) -> Path:
-    if not isinstance(value, str) or not value or "\\" in value:
-        raise BatchError("Manifest file paths must be relative strings")
-    relative = PurePosixPath(value)
-    if relative.is_absolute() or not relative.parts:
-        raise BatchError(f"Manifest path {value!r} escapes the batch root")
-    path = manifest.parent.joinpath(*relative.parts).resolve()
-    try:
-        path.relative_to(root.resolve())
-    except ValueError as error:
-        raise BatchError(f"Manifest path {value!r} escapes the batch root") from error
-    if not path.is_file():
-        raise BatchError(f"Statement does not exist: {value}")
-    if path.stat().st_size > MAX_STATEMENT_BYTES:
-        raise BatchError(f"Statement is too large: {value}")
-    return path
+def statements_in(folder: str | Path) -> list[Path]:
+    """Every statement in the folder, failing when none can be recognized."""
+
+    statements, _ = scan_folder(folder)
+    if not statements:
+        raise BatchError(f"No recognized statements in {Path(folder)}")
+    return statements

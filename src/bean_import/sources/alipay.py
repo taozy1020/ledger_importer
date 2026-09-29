@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from bean_import.customer_config import CustomerConfig
+from bean_import.customer_config import CustomerConfig, SourceInstance
 from bean_import.models import SourceRecord
 from bean_import.sources.common import (
     SourceParseError,
@@ -33,6 +33,7 @@ def parse_alipay(
     text: str,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> list[SourceRecord]:
     if "支付宝交易记录明细查询" in text:
         raise SourceParseError(
@@ -46,7 +47,9 @@ def parse_alipay(
             continue
         if cells[0].startswith("------"):
             break
-        records.append(_record(cells, columns, row_number, source_file, config))
+        records.append(
+            _record(cells, columns, row_number, source_file, config, instance)
+        )
     reject_duplicate_ids([record.source_id for record in records], "Alipay")
     if not records:
         raise SourceParseError("Alipay statement contains no transaction rows")
@@ -79,6 +82,7 @@ def _record(
     row_number: int,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> SourceRecord:
     category = cell(cells, columns, "交易分类", row_number)
     payee = cell(cells, columns, "交易对方", row_number)
@@ -96,7 +100,7 @@ def _record(
         row_number,
     )
     source_account, tail, counter_account = _accounts(
-        method, narration, config, row_number
+        method, narration, config, instance, row_number
     )
     raw_fields = {
         "交易时间": cell(cells, columns, "交易时间", row_number),
@@ -127,6 +131,7 @@ def _record(
         card_tail=tail,
         counter_account=counter_account,
         source_file=source_file,
+        occurred_at=raw_fields["交易时间"],
     )
 
 
@@ -172,26 +177,31 @@ def _accounts(
     method: str,
     narration: str,
     config: CustomerConfig,
+    instance: SourceInstance,
     row_number: int,
 ) -> tuple[str, str, str]:
-    balance = config.require_account("alipay")
-    yuebao = config.optional_account("alipay_yuebao")
+    balance = instance.account
+    yuebao = instance.sub_account("yuebao")
     if narration in {"余额宝-转出到余额", "余额宝-单次转入"}:
         if not yuebao:
             raise SourceParseError(
-                "accounts.alipay_yuebao is required for 余额宝 transfers"
+                f"{instance.label} needs a yuebao account for 余额宝 transfers"
             )
         return balance, "", yuebao
     if method in {"余额", ""}:
         return balance, "", ""
     if method == "余额宝":
         if not yuebao:
-            raise SourceParseError("accounts.alipay_yuebao is required for 余额宝 rows")
+            raise SourceParseError(
+                f"{instance.label} needs a yuebao account for 余额宝 rows"
+            )
         return yuebao, "", ""
     if "花呗" in method:
-        huabei = config.optional_account("alipay_huabei")
+        huabei = instance.sub_account("huabei")
         if not huabei:
-            raise SourceParseError("accounts.alipay_huabei is required for 花呗 rows")
+            raise SourceParseError(
+                f"{instance.label} needs a huabei account for 花呗 rows"
+            )
         return huabei, "", ""
     tail = card_tail(method)
     if tail:

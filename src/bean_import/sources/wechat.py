@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from bean_import.customer_config import CustomerConfig
+from bean_import.customer_config import CustomerConfig, SourceInstance
 from bean_import.models import SourceRecord
 from bean_import.sources.common import (
     SourceParseError,
@@ -36,6 +36,7 @@ def parse_wechat(
     text: str,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> list[SourceRecord]:
     rows = csv_rows(text)
     header_row, columns = _header(rows)
@@ -46,7 +47,9 @@ def parse_wechat(
         status = cell(cells, columns, "当前状态", row_number)
         if status in CANCELLED_STATUSES:
             continue
-        records.append(_record(cells, columns, row_number, source_file, config))
+        records.append(
+            _record(cells, columns, row_number, source_file, config, instance)
+        )
     reject_duplicate_ids([record.source_id for record in records], "WeChat")
     if not records:
         raise SourceParseError("WeChat statement contains no transaction rows")
@@ -74,6 +77,7 @@ def _record(
     row_number: int,
     source_file: str,
     config: CustomerConfig,
+    instance: SourceInstance,
 ) -> SourceRecord:
     type_name = cell(cells, columns, "交易类型", row_number)
     method = cell(cells, columns, "支付方式", row_number)
@@ -89,7 +93,7 @@ def _record(
         row_number,
     )
     source_account, tail, counter_account = _accounts(
-        type_name, method, config, row_number
+        type_name, method, config, instance, row_number
     )
     if blank(payee):
         payee = ""
@@ -124,6 +128,7 @@ def _record(
         card_tail=tail,
         counter_account=counter_account,
         source_file=source_file,
+        occurred_at=raw_fields["交易时间"],
     )
 
 
@@ -152,20 +157,21 @@ def _accounts(
     type_name: str,
     method: str,
     config: CustomerConfig,
+    instance: SourceInstance,
     row_number: int,
 ) -> tuple[str, str, str]:
     if "提现" in type_name or "充值" in type_name:
         tail = card_tail(method)
         if not tail:
             raise SourceParseError(f"Row {row_number} {type_name} has no card tail")
-        return config.require_account("wechat"), "", config.card_account(tail)
+        return instance.account, "", config.card_account(tail)
     if method in {"零钱", "/", ""}:
-        return config.require_account("wechat"), "", ""
+        return instance.account, "", ""
     if "零钱通" in method:
-        account = config.optional_account("wechat_lingqiantong")
+        account = instance.sub_account("lingqiantong")
         if not account:
             raise SourceParseError(
-                "accounts.wechat_lingqiantong is required for 零钱通 rows"
+                f"{instance.label} needs a lingqiantong account for 零钱通 rows"
             )
         return account, "", ""
     tail = card_tail(method)

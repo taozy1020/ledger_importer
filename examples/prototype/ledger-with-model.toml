@@ -1,13 +1,10 @@
-# 里程碑 1：只用确定性信息导入。没有 [semantic]，不会连接任何模型。
+# 里程碑 2：在里程碑 1 的配置上加一张 [semantic] 表，接本地 Ollama。
 currency = "CNY"
 date_window_days = 2
 
-# 账单下载到这个文件夹就行，平时不用改这份配置。
 [batch]
 folder = "statements"
 
-# 一个平台账号一条。同一个平台有两个账号就写两条，
-# identity 填账单文件头里的身份：微信昵称、支付宝账户或姓名、银行卡号。
 [[sources]]
 type = "wechat"
 account = "Assets:WeChat:Balance"
@@ -24,7 +21,6 @@ account = "Assets:Bank:BOC:Debit"
 type = "boc_credit"
 account = "Liabilities:CreditCard:BOC"
 
-# 写完整卡号；账单里只有后四位，匹配时用后四位。
 [[cards]]
 number = "6217000000001234"
 account = "Assets:Bank:BOC:Debit"
@@ -33,7 +29,6 @@ account = "Assets:Bank:BOC:Debit"
 number = "6259000000005678"
 account = "Liabilities:CreditCard:BOC"
 
-# 无法由账单本身确定分类时，按金额方向落到这两个账户。
 [unknown]
 expense = "Expenses:Unknown"
 income = "Income:Unknown"
@@ -47,3 +42,11 @@ expense = [
   "Expenses:Unknown",
 ]
 income = ["Income:Salary", "Income:Unknown"]
+
+# 整张表删掉就退回里程碑 1。本地 Ollama 不需要 API key。
+[semantic]
+endpoint = "http://127.0.0.1:11434/v1"
+model = "qwen3:8b"
+api_key_env = "BEAN_IMPORT_LLM_API_KEY"
+skill = "skills/food.md"
+max_memories = 8

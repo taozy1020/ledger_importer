@@ -5,6 +5,8 @@
 
 这份文档把后续实现收成一条流水线。0.1 预研里的来源隔离、人工审核和不改主账继续有效。分类主路径改为：确定性代码判断经济活动类型，LLM 只在允许的账户集合里完成语义归类。
 
+实现分成两个里程碑，边界写在第 14 节：里程碑 1 只用确定性信息，可以单独交付；里程碑 2 的模型实现放在同一个接口后面。
+
 当前仓库里的 CSV 映射和 related-batch demo 仍是这条流水线的最小样例，还没有 LLM，也还没有通用的多来源归一化。
 
 ## 1. 目标
@@ -36,19 +38,16 @@ flowchart LR
 
 ## 2. 多账单批次
 
-一次导入是一个批次，不是 Fava 里多次互不知情的单文件导入。批次包含：
+一次导入是一个批次，不是 Fava 里多次互不知情的单文件导入。批次就是一个文件夹：账单下载进去，不需要维护任何清单文件。
 
-- 一个稳定 `batch_id`
-- 一张或多张账单，每张账单有来源类型、来源资金账户、解析配置和文件路径
-- 批次根目录；所有账单路径都限制在这个根目录内
+Fava Import 按单个文件调用 importer，所以 Fava 看到的那一个文件是客户的 `ledger.toml` 本身，它的 `[batch].folder` 指向账单目录。识别到这份配置就等于“导入这个文件夹里的全部账单”。目录里无法识别的文件（PDF、压缩包、笔记）被跳过并列出，不会让整批失败。旧的 `*.merge.json` demo 只保留在 0.1 的 CSV 样例里。
 
-Fava Import 按单个文件调用 importer。因此 Fava 看到的是一张批次清单，清单再引用旁边的账单文件。现有 `*.merge.json` 就是这个入口的 demo：`imports/` 里只有清单，`related/` 里的 CSV 不会被当成另一批独立账单。
-
-研究阶段把清单从“银行 + 支付宝”推广为 N 个来源。第一批实现仍可以只有这两种来源，数据契约按 N 个来源设计。
+一份账单属于哪个账户由文件头决定，不由文件名决定。微信写 `微信昵称`，支付宝写 `姓名` 和 `支付宝账户`，中行写 `客户姓名` 和完整卡号。配置里每个平台账号一条 `[[sources]]`，`identity` 就是文件头里的那个字符串。匹配优先级是完全相同、卡号后四位相同、互为子串；只有同一来源仅配置一个账号时才允许文件头没有身份。匹配不上或同时匹配多条就整批失败，不把两个微信号合进一个账户。
 
 批次级错误直接失败，不产出部分 entries：
 
-- 清单路径越界、文件缺失或超过大小限制
+- 账单文件缺失或超过大小限制
+- 账单文件头的身份匹配不到唯一的 `[[sources]]`
 - 某个解析器无法识别列、日期或金额
 - 同一来源内出现重复 `source_id`
 
@@ -162,22 +161,22 @@ LLM 是费用账户和收入账户的分类器。它接收一条类型已经确�
   "narration": "生椰拿铁",
   "source_category": "餐饮美食",
   "source_types": ["bank", "alipay"],
-  "allowed_accounts": ["Expenses:Food", "Expenses:Food:Coffee", "Expenses:Transport"],
-  "examples": [
-    {"payee": "瑞幸咖啡", "account": "Expenses:Food:Coffee"}
-  ]
+  "allowed_accounts": ["Expenses:Food:Quick", "Expenses:Food:Delivery"],
+  "skill": "客户写的生活说明，例如餐饮按外卖、简餐、买菜、大餐区分",
+  "situation": "2026-09-26 星期六 08:12，早晨，金额 -32.00 CNY。对手：瑞幸咖啡。",
+  "memory": "Expenses:Food:Quick：12 笔，金额大约 18–45，出现在星期一、二、四。"
 }
 ```
 
-`allowed_accounts` 来自 Fava 传给 `extract()` 的现有账本，只保留与角色匹配的已打开账户。`examples` 来自账本里已有交易：优先同名 payee，其次相同平台分类，最多 8 条。账本就是个人分类习惯的记忆，研究阶段不另建规则库。
+`allowed_accounts` 来自 Fava 传给 `extract()` 的现有账本，只保留与角色匹配的已打开账户。`skill` 是客户自己写的 Markdown 生活说明。`situation` 由程序从这条事件抽取：星期、钟点、时段、金额、对手、平台分类和渠道。`memory` 把账本里已有交易按账户收成回忆，最多 8 个账户。账本是记忆，不是店名到账户的对照表。
 
 响应是固定 JSON：
 
 ```json
 {
-  "account": "Expenses:Food:Coffee",
+  "account": "Expenses:Food:Quick",
   "uncertain": false,
-  "reason": "商户和已有瑞幸交易一致"
+  "reason": "工作日早晨、金额不大，属于顺手解决的一餐"
 }
 ```
 
@@ -187,11 +186,11 @@ LLM 是费用账户和收入账户的分类器。它接收一条类型已经确�
 - `kind`、金额、币种、日期和资金账户没有被模型改写
 - 响应符合 schema，且没有额外的分录文本
 
-任一校验失败、调用失败或 `uncertain: true` 时，使用用户配置的 suspense 账户，例如 `Expenses:Uncategorized` 或 `Income:Uncategorized`。交易仍然生成，metadata 写明 `classification: suspense` 和原因，用户在 Fava 里改账户。
+任一校验失败、调用失败或 `uncertain: true` 时，使用用户配置的 unknown 账户，例如 `Expenses:Unknown` 或 `Income:Unknown`，也就是里程碑 1 的默认结果。交易仍然生成，metadata 写明 `classification: unknown` 和原因，用户在 Fava 里改账户。
 
 平台给出的“餐饮美食”只作为 `source_category` 提示。研究阶段不维护一张不断增长的平台分类到 Beancount 账户的表。现有 CSV 原型的 `[categories]` 精确映射继续服务示例和测试；真实账单路径以 LLM 加账户允许列表为准。
 
-调用配置显式给出 OpenAI 兼容 endpoint 和模型名。配置为空表示分类器关闭：原型仍走现有精确映射，缺少映射时保持现在的报错行为。程序不在 endpoint 失败后自动改连另一个公网模型。
+调用配置写在 `[semantic]` 里，显式给出 OpenAI 兼容 endpoint 和模型名。没有这张表就是里程碑 1，程序里不存在任何模型调用路径。程序不在 endpoint 失败后自动改连另一个公网模型。
 
 温度设为 0。已通过校验的响应按 `模型 + prompt 版本 + 事件规范字段 + 允许账户列表` 做本地缓存，同一次导入重跑直接读缓存。缓存记录模型 id、账户和事件 id，不另存完整账单原文。
 
@@ -205,12 +204,12 @@ LLM 是费用账户和收入账户的分类器。它接收一条类型已经确�
 - `source_id`，多条证据时保留全部 id
 - `filename`、`lineno`
 - `source_category`
-- `classification`：`llm`、`suspense` 或 `structural`
+- `classification`：模型 id、`unknown` 或 `structural`
 - `model_id`，结构性交易为空
 
 Fava Import 看到的是普通 Beancount Transaction。预览、修改账户、忽略重复项和保存都沿用 Fava。`insert-entry` 继续把结果写入专用文件，例如示例中的 `imported.bean`，主账文件只被 include。
 
-用户在 Fava 里保存后的交易，就是下一次导入的 `examples`。研究阶段不从这次修改自动生成规则草稿。
+用户在 Fava 里保存后的交易，就是下一次导入的 `memory`。研究阶段不从这次修改自动生成规则草稿。
 
 ## 8. 示例
 
@@ -251,10 +250,10 @@ Fava Import 看到的是普通 Beancount Transaction。预览、修改账户、�
 `examples/prototype/` 已经用合成 CSV 把微信、支付宝和中行表格接进了这条流水线。下面第 5 步仍然需要真实个人样本，PDF 和邮件容器也还没有解析。
 
 1. **领域契约。** 增加 `AccountingEvent` 和建议类型。单文件 CSV 先一对一变成事件，再用现有 category 映射渲染。Fava 输出与现在一致。
-2. **分类器接口。** 用假的分类器覆盖允许账户、非法账户、不确定和调用失败。非法结果落入 suspense，交易仍平衡。
-3. **可选真实 endpoint。** 配置写出后才调用；测试不访问网络。从 `existing` 账本收集允许账户和最多 8 条样例。
+2. **分类器接口。** 用假的分类器覆盖允许账户、非法账户、不确定和调用失败。非法结果落入 unknown 账户，交易仍平衡。
+3. **可选真实 endpoint。** 写出 `[semantic]` 后才调用；测试不访问网络。从 `existing` 账本收集允许账户和账户记忆。
 4. **关联器独立。** 把银行与支付宝的唯一匹配移到事件层。含糊匹配保留分行事件和 `link_candidates`，解析错误仍然失败整批。
-5. **真实样本评估。** 用一份个人支付宝账单和对应银行账单记录：唯一匹配数、含糊匹配数、LLM 建议被接受的比例、suspense 比例、错误账户的类型。样本不进入仓库。
+5. **真实样本评估。** 用一份个人支付宝账单和对应银行账单记录：唯一匹配数、含糊匹配数、LLM 建议被接受的比例、unknown 比例、错误账户的类型。样本不进入仓库。里程碑 1 先只评估配对和方向。
 
 真实样本的接受率决定下一步是解析 PDF/EML，还是继续增加银行适配器。在此之前不实现通用规则语言、规则草稿回放、独立审核 GUI 或 SQLite 工作流。
 
@@ -264,17 +263,17 @@ Fava Import 看到的是普通 Beancount Transaction。预览、修改账户、�
 - 金额使用 `Decimal`。适配器先统一符号，关联使用精确金额。
 - 同一经济活动的多条证据只形成一个资金金额，不把银行扣款和支付平台记录相加。
 - 事件类型和资金 posting 由代码确定。LLM 只填允许列表中的费用或收入账户。
-- 分类器未配置时，现有原型继续使用精确 category 映射。
-- 校验失败的建议变成 suspense 交易，并在 metadata 中标明。
+- 没有配置模型时，平台账单路径按金额方向落到 unknown 账户；现有 CSV 原型继续使用精确 category 映射。
+- 校验失败的建议变成 unknown 交易，并在 metadata 中标明。
 - 主账文件不是 importer 的写入目标。保存由 Fava 按 `insert-entry` 路由到专用文件。
 
 ## 12. 实现前仍要拍板的配置
 
 这些有默认答案，真实样本接入时再按账本调整：
 
-- suspense 账户名由用户配置，并事先在账本中 `open`
+- unknown 账户名由用户配置，并事先在账本中 `open`
 - 日期窗口默认沿用 demo 的 2 天
-- 历史样例最多 8 条
+- 账本记忆最多 8 个账户
 - 模型温度是 0
 - 缓存放在账本目录旁的本地文件，不提交进本仓库
 
@@ -284,7 +283,7 @@ Fava Import 看到的是普通 Beancount Transaction。预览、修改账户、�
 
 **框架。** 不使用 LangChain 或 LangGraph。语义分类是一次检索加一次结构化补全，再加本地账户校验。LangGraph 适合模型自行循环、调用工具或在图里暂停等人；这里的人工审核已经由 Fava Import 承担。直接请求 OpenAI 兼容的 `/chat/completions`，测试可以替换 transport，不访问网络。
 
-**客户配置。** 每个账本一份 TOML，而不是一份 Python 配置模块。`[accounts]` 和 `[cards]` 写这个客户的资金账户，`[roles]` 写允许模型选择的费用和收入账户，`[classifier]` 写 endpoint、模型名和 suspense。换一个客户就换这一份文件。
+**客户配置。** 每个账本一份 TOML，而不是一份 Python 配置模块。`[batch]` 写账单文件夹；`[[sources]]` 每个平台账号一条，带上文件头里的 `identity`；`[[cards]]` 写完整卡号，账单里只有后四位所以按后四位匹配，后四位冲突直接报错；`[roles]` 写允许选择的费用和收入账户；`[unknown]` 写两个兜底账户。可选的 `[semantic]` 写 endpoint、模型名和 skill 路径。换一个客户就换这一份文件。
 
 **LLM 前的合并。** `normalize.py` 只做三种结构性配对，而且必须一对一：
 
@@ -294,4 +293,30 @@ Fava Import 看到的是普通 Beancount Transaction。预览、修改账户、�
 
 多个候选就不合并，每条来源仍单独成事件，并写上 `link_candidates`。余额和零钱支付不寻找银行对手。
 
-**知识库。** 客户在 `[[knowledge.examples]]` 里写商户和账户，在 `[[knowledge.guides]]` 里写带关键词的短说明。导入时按商户名和关键词选出最多 8 条放进提示词。已有账本里的 payee 也会作为 `ledger` 示例加入。没有配置 endpoint 时，最长的商户示例可以直接决定账户；指南只在调用模型时出现，不会变成另一套规则引擎。
+**知识库。** 客户用一份 Markdown skill 描述生活里的分类方式，例如餐饮按外卖、简餐、买菜和餐厅大餐区分。程序再为每一笔交易抽出时间、金额和渠道，并把账本中已有交易按账户收成记忆。skill、情境和记忆一起送给本地模型。没有配置模型时，这类交易落到 unknown 账户，不会按店名自动入账。
+
+## 14. 里程碑与模块分层
+
+分层的目的是让里程碑 1 单独可用，并且删掉整个模型实现也不影响导入。
+
+| 里程碑 | 范围 | 模块 | 配置 |
+| --- | --- | --- | --- |
+| 1 确定性导入 | 分源解析、跨来源唯一配对、事件类型、转账与还款、渲染、Fava 入口 | `sources/`、`normalize.py`、`render.py`、`pipeline.py`、`batch_importer.py` | `ledger.toml`，必须有 `[unknown]` |
+| 2 语义分类 | 生活 skill、情境抽取、账本记忆、本地模型调用与账户校验 | `semantic/knowledge.py`、`semantic/llm.py` | 追加一张 `[semantic]` 表 |
+
+接口只有一个，定义在 `classify.py`：
+
+```text
+SemanticClassifier.classify(ClassificationRequest) -> Classification
+```
+
+`ClassificationRequest` 只带确定性事实：事件 id、类型、待填角色、日期、原始时间戳、带符号金额、币种、对手、摘要、平台分类、来源类型、允许账户和 unknown 账户。`Classification` 只带账户、是否不确定、原因、模型 id 和状态（`accepted` 或 `unknown`）。
+
+里程碑 1 的实现是 `UnknownClassifier`：不猜测分类，只保留已经确定的方向。金额为负得到 `[unknown].expense`，为正得到 `[unknown].income`，metadata 写 `classification: unknown`。转账、还款和其他两侧账户都已知的事件根本不进入分类器，仍然写 `classification: structural`。
+
+分层规则：
+
+- 确定性模块不导入 `bean_import.semantic`。
+- `pipeline.py` 是唯一的组装点，只有在 `[semantic]` 存在时才构造模型分类器。
+- 换掉模型实现只需要提供另一个 `SemanticClassifier`，不改归一化和渲染。
+- 里程碑 2 的失败路径和里程碑 1 的结果相同：调用失败、账户越界或模型不确定，都落到同一个 unknown 账户。
